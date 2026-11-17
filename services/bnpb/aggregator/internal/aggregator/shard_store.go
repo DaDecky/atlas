@@ -27,10 +27,11 @@ type ShardStore interface {
 // WriteBatch belongs to exactly one source and one sealed writer epoch.
 // Now is the successful ingestion time, supplied by the caller for reproducibility.
 type WriteBatch struct {
-	Source string
-	Epoch  int64
-	Events []HazardEvent
-	Now    time.Time
+	Source       string
+	Epoch        int64
+	Events       []HazardEvent
+	Now          time.Time
+	sourceLocked bool
 }
 
 // StreamState is an opaque JSON object owned by the source adapter. Offset and
@@ -114,15 +115,18 @@ func (s *Store) CommitState(ctx context.Context, batch WriteBatch, state StreamS
 // LoadState returns pgx.ErrNoRows before the first committed state.
 func (s *Store) LoadState(ctx context.Context, source string) (StreamState, error) {
 	var state StreamState
+
 	tx, err := s.begin(ctx, true)
 	if err != nil {
 		return state, err
 	}
 	defer tx.Rollback(ctx)
+
 	err = tx.QueryRow(ctx, `SELECT committed_offset, payload FROM stream_state WHERE source = $1`, source).Scan(&state.Offset, &state.Payload)
 	if err != nil {
 		return state, err
 	}
+
 	return state, tx.Commit(ctx)
 }
 
@@ -136,6 +140,10 @@ func (s *Store) commitBatch(ctx context.Context, batch WriteBatch, checkpoint *t
 	[]HazardEvent,
 	error,
 ) {
+	if err := validateBatch(batch); err != nil {
+		return nil, err
+	}
+
 	if batch.Epoch < 1 {
 		return nil, ErrStaleEpoch
 	}

@@ -91,3 +91,7 @@ DEMO_RUN = TestDemo$(if $(P),/$(P))
 
 demo:
 	cd demo && DEMO_LOAD=$(LOAD) DEMO_KEEP=$(KEEP) go test -tags demo -count=1 -timeout 30m -v -run '$(DEMO_RUN)' .
+
+.PHONY: data-integration
+data-integration:
+	./scripts/data-integration.sh
