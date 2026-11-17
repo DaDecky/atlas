@@ -42,7 +42,8 @@ SENSOR_PANTAI. Stream offsets must be nonnegative and strictly increase after
 the first commit. Reconnect callers should skip `ErrStaleOffset` replays.
 
 The canonical source names are exactly `BMKG`, `PVMBG`, `SATELIT`, and
-`SENSOR_PANTAI`. Event identities use the existing source/reference hash; callers
+`SENSOR_PANTAI`. Event identities use `CanonicalHazardID(source, sourceRefID)` (SHA-256 over
+source, a NUL byte, and the source reference); callers
 must preserve a stable `HazardID` and `SourceRefID` across replay. Events must
 carry valid hazard fields, nonzero observation/ingestion timestamps, and a
 non-nil JSON attributes object (an empty object is valid). `Now` marks the
@@ -56,7 +57,9 @@ Its limit is required and should be in the HTTP API's range of 1 to 500. An
 empty complete answer has `data: []`, `partial: false`, and
 `unavailable_units: []`; per-source freshness is independent of shard
 availability. Database failures return an error rather than a successful empty
-page. Keyset pagination will be an additive query/response extension in B6.
+page. `Query.Cursor` and `Response.NextCursor` provide keyset pagination.
+Cursors bind source, hazard type, severity, since and audit ordering; do not reuse
+a cursor with different filters.
 
 An existing M1 database is upgraded when opened, preserving its events and
 progress. The migration widens the source and hazard-type checks and adds the
@@ -116,7 +119,8 @@ Use `errors.Is` for the named sentinel errors. A connection failure during
 commit can have an unknown outcome: retry retains source identities, event
 contents, checkpoint, and offset. Revision idempotence and the committed-offset
 guard make that retry safe. A returned `changed` slice is not a durable
-publication queue; delivery guarantees require the outbox from B10.
+publication queue; the store now enqueues changed events transactionally in its
+outbox (B10), which the relay delivers with stable message identities.
 
 ## Local verification
 
@@ -133,13 +137,11 @@ and fences after reopening the store. The existing M1 tests remain in the run.
 
 ## Integration boundaries
 
-The running M1 pollers still use `Save`; that legacy method does not check an
-epoch. Adapters must use the new contract to receive fencing. Wiring the pollers
-to the real leadership implementation is a later integration step.
+The running single-instance M1 pollers use `Save` and the persistent outbox.
+Cluster mode requires `EpochIngest` under source leadership; uncoordinated M1
+polling is rejected. Adapters use the new contract to receive fencing.
 
-This is not the replicated store. Placement, dual writes, majority sealing,
-refill, scatter-gather with keyset cursors, partial reads on shard failures,
-outbox, parking, Audit, and analytics remain later data items. In particular,
+The single-instance implementation is not the replicated store. In particular,
 do not treat `MarkBehind` as a successful operation until replicated placement
-exists. The next experiment is B4: refill under live writes on three local
-PostgreSQL containers, before implementing the full replication design.
+exists. The implemented replicated store and the B1–B13 handoff are described in
+[data-work.md](data-work.md).

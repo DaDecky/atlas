@@ -3,8 +3,9 @@
 Disaster coordination services for BMKG, PVMBG, and BNPB. M1 runs each component in its own container. Auth owns its session database, the Aggregator owns the canonical store, and clients retrieve hazard data through the Client API.
 
 The [M2 ShardStore contract v1](docs/M2/shard-store.md)
-can be developed and tested locally with `make integration`, before setting up
-the demo devices or Kubernetes cluster.
+and [B1–B13 data implementation guide](docs/M2/data-work.md) cover local
+verification (`make integration`, `make data-integration`), cluster handoff,
+Audit/analytics, the dataset tool, and the remaining demo evidence.
 
 ## Run
 
