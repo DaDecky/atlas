@@ -35,19 +35,7 @@ func (c *Cluster) NodeMetrics(ctx context.Context) ([]NodeMetric, error) {
 			continue
 		}
 
-		for shard, copies := range t.Shards {
-			owns := false
-
-			for _, copy := range copies {
-				if copy.Node == name {
-					owns = true
-				}
-			}
-
-			if !owns {
-				continue
-			}
-
+		for shard := range node.Shards {
 			call, cancel := c.timeout(ctx)
 
 			tx, err := node.Shards[shard].begin(call, true)
@@ -94,6 +82,12 @@ func DataMetricsHandler(c *Cluster, token string) http.Handler {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 
 		for _, m := range metrics {
+			available := 1
+			if m.Unavailable {
+				available = 0
+			}
+
+			_, _ = fmt.Fprintf(w, "atlas_store_available{node=%q} %d\n", m.Node, available)
 			_, _ = fmt.Fprintf(w, "atlas_store_records{node=%q} %d\natlas_store_bytes{node=%q} %d\natlas_store_inserts{node=%q} %d\natlas_store_updates{node=%q} %d\n", m.Node, m.Records, m.Node, m.Bytes, m.Node, m.Inserts, m.Node, m.Updates)
 		}
 	})
