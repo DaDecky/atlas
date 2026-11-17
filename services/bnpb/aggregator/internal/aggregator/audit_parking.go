@@ -3,6 +3,11 @@ package aggregator
 import "net/http"
 
 func (a *AuditAPI) unprocessed(w http.ResponseWriter, r *http.Request) {
+	if len(r.URL.Query()["cursor"]) > 1 {
+		auditError(w, 400, "bad_request", "repeated cursor")
+		return
+	}
+
 	copyRequest := r.Clone(r.Context())
 	copyURL := *r.URL
 	copyRequest.URL = &copyURL
