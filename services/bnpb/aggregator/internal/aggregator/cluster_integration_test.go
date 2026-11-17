@@ -63,7 +63,7 @@ func dataCluster(t *testing.T) *Cluster {
 		}
 
 		nodes[name] = node
-		if _, err = node.Store.ingest.Exec(ctx, `TRUNCATE public.publication_outbox; UPDATE public.source_fence SET epoch=1`); err != nil {
+		if _, err = node.Store.ingest.Exec(ctx, `TRUNCATE public.publication_outbox; UPDATE public.source_fence SET epoch=1; UPDATE public.ingestion_clock SET last_value='epoch'`); err != nil {
 			t.Fatal(err)
 		}
 
@@ -208,3 +208,249 @@ func TestDataIntegrationReplicatedContract(t *testing.T) {
 	runShardStoreContract(t, func(t *testing.T) ShardStore { return dataCluster(t) })
 }
 
+func TestDataIntegrationLiveRefillAndAudit(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	event := contractEvent("BMKG", "live", now)
+	shard := placement.Shard(event.HazardID)
+
+	initial := WriteBatch{Source: "BMKG", Epoch: 1, Events: []HazardEvent{event}, Now: now}
+	if _, err := c.Upsert(ctx, initial); err != nil {
+		t.Fatal(err)
+	}
+
+	table, _, _ := c.Placement.Load(ctx)
+
+	target := table.Shards[shard][1].Node
+	if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: target, Generation: table.Generation}); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := c.Nodes[target].Shards[shard]
+
+	tx, err := dest.begin(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = tx.Exec(ctx, `TRUNCATE hazard_events`)
+	if err == nil {
+		err = tx.Commit(ctx)
+	}
+
+	_ = tx.Rollback(ctx)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writes := make(chan error, 1)
+
+	go func() {
+		for i := 0; i < 30; i++ {
+			b := initial
+
+			b.Events = []HazardEvent{contractEvent("BMKG", fmt.Sprintf("live-%d", i), now)}
+			if _, err := c.Upsert(ctx, b); err != nil {
+				writes <- err
+				return
+			}
+		}
+
+		writes <- nil
+	}()
+
+	refillErr := c.Refill(ctx, shard, target)
+
+	if err := <-writes; err != nil {
+		t.Fatal("live writes", err)
+	}
+
+	if refillErr != nil {
+		if err := c.Refill(ctx, shard, target); err != nil {
+			t.Fatal("refill retry", err)
+		}
+	}
+	// Finish all needed repair and compare full canonical rows on both holders.
+	a, err := shardDigest(ctx, c.Nodes[table.Shards[shard][0].Node].Shards[shard])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := shardDigest(ctx, dest)
+	if err != nil || a != b {
+		t.Fatal("refill diverged", a, b, err)
+	}
+
+	all, err := c.Checksum(ctx, "BMKG")
+	if err != nil || all.Count != 31 || all.Partial {
+		t.Fatal("audit count", all, err)
+	}
+
+	summary, err := Analytics(ctx, c, nil, nil)
+	if err != nil || summary.Total != 31 {
+		t.Fatal("analytics vs audit", summary.Total, err)
+	}
+
+	q := Query{Limit: 7, Audit: true}
+	seen := map[string]bool{}
+
+	for {
+		page, err := c.Read(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, h := range page.Data {
+			if seen[h.HazardID] {
+				t.Fatal("duplicate scatter page")
+			}
+
+			seen[h.HazardID] = true
+		}
+
+		if page.NextCursor == nil {
+			break
+		}
+
+		q.Cursor = *page.NextCursor
+	}
+
+	if len(seen) != 31 {
+		t.Fatal("scatter pages lost rows", len(seen))
+	}
+
+	t.Log("live writes and replica refill agree; Audit, analytics and paginated scatter reads agree")
+}
+
+func TestDataIntegrationAutomaticWipeRecoveryAndParking(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	event := contractEvent("PVMBG", "recovered", now)
+	if _, err := c.Upsert(ctx, WriteBatch{Source: "PVMBG", Epoch: 1, Now: now, Events: []HazardEvent{event}}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := ParkedMessage{MessageID: "replicated-message", Source: "PVMBG", SourceRefID: "new", ReceivedAt: now, Raw: []byte(`{"new":1}`), ReasonCode: "schema_incompatible", Reason: "changed schema"}
+	if err := c.Park(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	// A node returns with empty shard schemas, without manually marking placement.
+	node := c.Nodes["b"]
+	for _, shard := range node.Shards {
+		if _, err := node.Store.ingest.Exec(ctx, `DROP SCHEMA `+shard.namespace+` CASCADE`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := c.RecoverOnce(ctx); err != nil {
+		t.Fatal("automatic refill", err)
+	}
+
+	checksum, err := c.Checksum(ctx, "PVMBG")
+	if err != nil || checksum.Count != 1 || checksum.Partial {
+		t.Fatal("recovery lost events", checksum, err)
+	}
+
+	page, err := c.ListUnprocessed(ctx, "PVMBG", "", 100)
+	if err != nil || len(page.Items) != 1 {
+		t.Fatal("parking lost on recovery", page, err)
+	}
+
+	count, err := c.Replay(ctx, "PVMBG", 1, 100, func(m ParkedMessage) (HazardEvent, error) { return contractEvent(m.Source, m.SourceRefID, now), nil })
+	if err != nil || count != 1 {
+		t.Fatal("replicated replay", count, err)
+	}
+
+	page, err = c.ListUnprocessed(ctx, "PVMBG", "", 100)
+	if err != nil || len(page.Items) != 0 {
+		t.Fatal("recovery flag", page, err)
+	}
+}
+
+func TestDataIntegrationNewNodeJoinsWithoutStoppingReads(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	events := []HazardEvent{}
+	for i := 0; i < 100; i++ {
+		events = append(events, contractEvent("BMKG", fmt.Sprintf("join-%d", i), now))
+	}
+
+	if _, err := c.Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: now, Events: events}); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := c.Checksum(ctx, "BMKG")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	url := os.Getenv("DATA_TEST_D")
+	if url == "" {
+		t.Skip("fourth local database required")
+	}
+
+	node, err := OpenDataNode(ctx, "d", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node.Store.Close()
+
+	c.Nodes["d"] = node
+	for _, s := range node.Shards {
+		tx, err := s.begin(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = tx.Exec(ctx, `TRUNCATE hazard_events,stream_state,unprocessed_messages`)
+		if err == nil {
+			err = tx.Commit(ctx)
+		}
+
+		_ = tx.Rollback(ctx)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err = c.RebalanceOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := c.Checksum(ctx, "BMKG")
+	if err != nil || after.Count != before.Count || after.Checksum != before.Checksum || after.Partial {
+		t.Fatal("join changed canonical data", before, after, err)
+	}
+
+	table, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	held := 0
+
+	for _, copies := range table.Shards {
+		for _, copy := range copies {
+			if copy.Node == "d" {
+				held++
+			}
+		}
+	}
+
+	if held == 0 {
+		t.Fatal("new node has no shards")
+	}
+
+	if _, err = c.Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: now, Events: []HazardEvent{contractEvent("BMKG", "post-join", now)}}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("new node holds %d copies; checksum unchanged across join; writes continue", held)
+}

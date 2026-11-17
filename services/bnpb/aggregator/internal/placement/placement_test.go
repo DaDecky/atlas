@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestPlacementDistributionAndStableOrder(t *testing.T) {
@@ -95,5 +96,58 @@ func TestConfigMapCAS(t *testing.T) {
 
 	if err = repo.CompareAndSwap(context.Background(), v, loaded); err != ErrConflict {
 		t.Fatal("stale CAS", err)
+	}
+}
+
+func TestLeaseUsesObservedVersionForTakeover(t *testing.T) {
+	var doc leaseDocument
+
+	doc.Metadata.Name = "placement-recovery"
+	doc.Metadata.ResourceVersion = "1"
+	doc.Spec.HolderIdentity = "other"
+	doc.Spec.LeaseDurationSeconds = 1
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" {
+			_ = json.NewEncoder(w).Encode(doc)
+			return
+		}
+
+		var next leaseDocument
+		if err := json.NewDecoder(r.Body).Decode(&next); err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+
+			return
+		}
+
+		if next.Metadata.ResourceVersion != doc.Metadata.ResourceVersion {
+			w.WriteHeader(409)
+			return
+		}
+
+		next.Metadata.ResourceVersion = "2"
+		doc = next
+		_ = json.NewEncoder(w).Encode(doc)
+	}))
+	defer server.Close()
+
+	lease := &Lease{Client: server.Client(), Origin: server.URL, Name: "placement-recovery", Namespace: "test", Holder: "ours", Duration: time.Second}
+	if err := lease.Acquire(context.Background()); err != ErrLeaseHeld {
+		t.Fatal("stole unobserved lease", err)
+	}
+	// The remote renewTime can be arbitrarily far in the past or future; only
+	// local observation of the same version authorizes takeover.
+	lease.since = time.Now().Add(-2 * time.Second)
+	if err := lease.Acquire(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if doc.Spec.HolderIdentity != "ours" {
+		t.Fatal("not acquired")
+	}
+
+	if err := lease.Acquire(context.Background()); err != nil {
+		t.Fatal("renew", err)
 	}
 }

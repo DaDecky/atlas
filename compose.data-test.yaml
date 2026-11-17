@@ -18,3 +18,5 @@ services:
     <<: *store
   store-c:
     <<: *store
+  store-d:
+    <<: *store

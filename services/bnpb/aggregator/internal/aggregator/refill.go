@@ -304,6 +304,25 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 		return errors.New("new node is not configured")
 	}
 
+	donor := false
+
+	for _, copy := range t.Shards[shard] {
+		if copy.Node != old && copy.State == "serving" && c.Nodes[copy.Node] != nil {
+			call, cancel := c.timeout(ctx)
+			_, err := c.Nodes[copy.Node].Shards[shard].Read(call, Query{Limit: 1})
+
+			cancel()
+
+			if err == nil {
+				donor = true
+			}
+		}
+	}
+
+	if !donor {
+		return errors.New("replacement needs a reachable serving donor")
+	}
+
 	found := false
 
 	for i, copy := range t.Shards[shard] {
@@ -338,7 +357,26 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 		return err
 	}
 
-	return c.Refill(ctx, shard, newNode)
+	if err = c.Refill(ctx, shard, newNode); err != nil {
+		return err
+	}
+
+	if previous := c.Nodes[old]; previous != nil {
+		call, cancel := c.timeout(ctx)
+		defer cancel()
+
+		tx, err := previous.Shards[shard].begin(call, false)
+		if err == nil {
+			_, err = tx.Exec(call, `TRUNCATE hazard_events,stream_state,unprocessed_messages; UPDATE source_progress SET checkpoint=NULL,last_success_at=NULL,stale_since=NULL`)
+			if err == nil {
+				_ = tx.Commit(call)
+			}
+
+			_ = tx.Rollback(call)
+		}
+	}
+
+	return nil
 }
 
 func (s *Store) restoreParked(ctx context.Context, m ParkedMessage) error {

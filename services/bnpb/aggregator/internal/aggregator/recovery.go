@@ -159,5 +159,79 @@ func (c *Cluster) RecoverOnce(ctx context.Context) error {
 		}
 	}
 
+	return c.RebalanceOnce(ctx)
+}
+
+// RebalanceOnce uses the current healthy configured membership. Copy moves are
+// incremental, retain a serving donor, and never stop the application globally.
+func (c *Cluster) RebalanceOnce(ctx context.Context) error {
+	names := []string{}
+
+	for name, node := range c.Nodes {
+		call, cancel := c.timeout(ctx)
+		err := node.Store.Health(call)
+
+		cancel()
+
+		if err == nil {
+			names = append(names, name)
+		}
+	}
+
+	if len(names) < 3 {
+		return nil
+	}
+
+	desired, err := placement.New(names)
+	if err != nil {
+		return err
+	}
+
+	for shard, want := range desired.Shards {
+		for _, target := range want {
+			current, _, err := c.Placement.Load(ctx)
+			if err != nil {
+				return err
+			}
+
+			has := false
+
+			for _, copy := range current.Shards[shard] {
+				if copy.Node == target.Node {
+					has = true
+				}
+			}
+
+			if has {
+				continue
+			}
+
+			old := ""
+
+			for _, copy := range current.Shards[shard] {
+				keep := false
+
+				for _, w := range want {
+					if copy.Node == w.Node {
+						keep = true
+					}
+				}
+
+				if !keep {
+					old = copy.Node
+					break
+				}
+			}
+
+			if old == "" {
+				continue
+			}
+
+			if err = c.MoveCopy(ctx, shard, old, target.Node); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
