@@ -3,6 +3,7 @@ package aggregator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -119,6 +120,25 @@ func TestDataIntegrationDualWriteWipeRefillAndNextLoss(t *testing.T) {
 	page, err := c.Read(ctx, Query{Limit: 500})
 	if err != nil || len(page.Data) != 150 || page.Partial {
 		t.Fatal("initial read", len(page.Data), err)
+	}
+
+	metrics, err := c.NodeMetrics(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	physical := int64(0)
+
+	for _, m := range metrics {
+		if m.Unavailable || m.Bytes <= 0 {
+			t.Fatal("invalid node metrics", m)
+		}
+
+		physical += m.Records
+	}
+
+	if physical != 300 {
+		t.Fatal("physical replica count", physical)
 	}
 
 	for _, node := range c.Nodes {
@@ -453,4 +473,85 @@ func TestDataIntegrationNewNodeJoinsWithoutStoppingReads(t *testing.T) {
 	}
 
 	t.Logf("new node holds %d copies; checksum unchanged across join; writes continue", held)
+}
+
+func TestDataIntegrationTakeoverExcludesUnsealedReplica(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	offline := c.Nodes["c"]
+	delete(c.Nodes, "c")
+
+	if err := c.Seal(ctx, "BMKG", 2); err != nil {
+		t.Fatal(err)
+	}
+
+	table, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, copies := range table.Shards {
+		for _, copy := range copies {
+			if copy.Node == "c" && copy.State != "behind" {
+				t.Fatal("unsealed replica still serves reads")
+			}
+		}
+	}
+
+	now := time.Now().UTC()
+	if _, err = c.Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: now}); !errors.Is(err, ErrStaleEpoch) {
+		t.Fatal("old writer survived takeover", err)
+	}
+
+	c.Nodes["c"] = offline
+	if err = c.RecoverOnce(ctx); err != nil {
+		t.Fatal("takeover recovery", err)
+	}
+
+	epoch, err := offline.Store.Epoch(ctx, "BMKG")
+	if err != nil || epoch != 2 {
+		t.Fatal("returned replica not sealed", epoch, err)
+	}
+}
+
+func TestDataIntegrationConcurrentWritersDoNotStarveIngestionPool(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	errs := make(chan error, 8)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Go(func() {
+			_, err := c.Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: now, Events: []HazardEvent{contractEvent("BMKG", fmt.Sprintf("concurrent-%d", i), now)}})
+			errs <- err
+		})
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	table, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, copies := range table.Shards {
+		for _, copy := range copies {
+			if copy.State != "serving" {
+				t.Fatal("healthy node marked behind by pool starvation", copy)
+			}
+		}
+	}
+
+	checksum, err := c.Checksum(ctx, "BMKG")
+	if err != nil || checksum.Count != 8 {
+		t.Fatal(checksum, err)
+	}
 }

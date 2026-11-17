@@ -108,6 +108,10 @@ func (e *EpochIngest) Checkpoint(ctx context.Context, source string) (*time.Time
 }
 
 func (e *EpochIngest) Save(ctx context.Context, source string, events []HazardEvent, checkpoint *time.Time, now time.Time) ([]HazardEvent, error) {
+	if source != e.Source {
+		return nil, errors.New("writer is bound to a different source")
+	}
+
 	b := WriteBatch{Source: source, Epoch: e.WriterEpoch, Events: events, Now: now}
 	if checkpoint != nil {
 		return e.Data.CommitCheckpoint(ctx, b, *checkpoint)
@@ -254,7 +258,15 @@ func offlineDataNode(name, url string) (*DataNode, error) {
 		return nil, err
 	}
 
-	store := &Store{ingest: ingest, query: query}
+	coordinator, err := pgxpool.NewWithConfig(context.Background(), ingestConfig.Copy())
+	if err != nil {
+		ingest.Close()
+		query.Close()
+
+		return nil, err
+	}
+
+	store := &Store{ingest: ingest, query: query, coordination: coordinator}
 
 	node := &DataNode{Name: name, Store: store, Shards: map[string]*Store{}}
 	for i := 0; i < placement.Shards; i++ {

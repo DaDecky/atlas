@@ -23,7 +23,12 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	startup, stop := context.WithTimeout(ctx, 15*time.Second)
+	startupTimeout := 15 * time.Second
+	if os.Getenv("M2_DATA_CONFIG") != "" {
+		startupTimeout = 2 * time.Minute
+	}
+
+	startup, stop := context.WithTimeout(ctx, startupTimeout)
 
 	store, err := openData(startup, c)
 

@@ -304,6 +304,12 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 		return errors.New("new node is not configured")
 	}
 
+	for source, epoch := range t.WriterEpochs {
+		if err := c.Nodes[newNode].Store.Seal(ctx, source, epoch); err != nil {
+			return err
+		}
+	}
+
 	donor := false
 
 	for _, copy := range t.Shards[shard] {
@@ -361,20 +367,9 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 		return err
 	}
 
-	if previous := c.Nodes[old]; previous != nil {
-		call, cancel := c.timeout(ctx)
-		defer cancel()
-
-		tx, err := previous.Shards[shard].begin(call, false)
-		if err == nil {
-			_, err = tx.Exec(call, `TRUNCATE hazard_events,stream_state,unprocessed_messages; UPDATE source_progress SET checkpoint=NULL,last_success_at=NULL,stale_since=NULL`)
-			if err == nil {
-				_ = tx.Commit(call)
-			}
-
-			_ = tx.Rollback(call)
-		}
-	}
+	// Retain the retired copy outside placement. A paused former planner must
+	// never truncate a schema that a newer planner may already have reassigned.
+	// Physical cleanup requires its own fenced ownership protocol.
 
 	return nil
 }

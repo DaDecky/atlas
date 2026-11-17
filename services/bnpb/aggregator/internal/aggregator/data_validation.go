@@ -20,6 +20,10 @@ func validateBatch(b WriteBatch) error {
 			return errors.New("invalid event identity or timestamps")
 		}
 
+		if h.HazardID != hazardID(h.Source, h.SourceRefID) {
+			return errors.New("hazard ID differs from canonical source identity")
+		}
+
 		expected := map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
 		if h.HazardType != expected[h.Source] {
 			return errors.New("hazard type differs from source")
@@ -32,6 +36,7 @@ func validateBatch(b WriteBatch) error {
 		if h.Latitude < -90 || h.Latitude > 90 || h.Longitude < -180 || h.Longitude > 180 {
 			return errors.New("coordinates out of range")
 		}
+
 		if math.IsNaN(h.Latitude) || math.IsNaN(h.Longitude) || math.IsInf(h.Latitude, 0) || math.IsInf(h.Longitude, 0) {
 			return errors.New("non-finite coordinates")
 		}

@@ -15,6 +15,7 @@ import (
 // Ingestion and reads have separate pools so polling cannot consume read capacity.
 type Store struct {
 	ingest, query *pgxpool.Pool
+	coordination  *pgxpool.Pool
 	namespace     string
 }
 
@@ -83,6 +84,10 @@ func OpenStore(ctx context.Context, url string, ingestSize, querySize int32) (*S
 }
 
 func (s *Store) Close() {
+	if s.coordination != nil {
+		s.coordination.Close()
+	}
+
 	s.ingest.Close()
 	s.query.Close()
 }

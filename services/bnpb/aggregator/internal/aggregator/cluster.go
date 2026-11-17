@@ -37,6 +37,14 @@ func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
 		return nil, err
 	}
 
+	coordinator, err := openPool(ctx, url, 4)
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
+
+	s.coordination = coordinator
+
 	n := &DataNode{Name: name, Store: s, Shards: map[string]*Store{}}
 	for i := 0; i < placement.Shards; i++ {
 		key := fmt.Sprintf("shard-%d", i)
@@ -62,7 +70,24 @@ func (c *Cluster) timeout(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(ctx, d)
 }
 
-func (c *Cluster) Health(ctx context.Context) error { _, _, err := c.Placement.Load(ctx); return err }
+func (c *Cluster) Health(ctx context.Context) error {
+	if _, _, err := c.Placement.Load(ctx); err != nil {
+		return err
+	}
+
+	for _, node := range c.Nodes {
+		call, cancel := c.timeout(ctx)
+		err := node.Store.Health(call)
+
+		cancel()
+
+		if err == nil {
+			return nil
+		}
+	}
+
+	return errors.New("all data stores unavailable")
+}
 
 func (c *Cluster) Epoch(ctx context.Context, source string) (int64, error) {
 	var highest int64
@@ -102,20 +127,34 @@ func (c *Cluster) Seal(ctx context.Context, source string, epoch int64) error {
 	}
 
 	count := 0
+	sealed := map[string]bool{}
 
-	for _, n := range c.Nodes {
+	for name, n := range c.Nodes {
 		call, cancel := c.timeout(ctx)
 		err = n.Store.Seal(call, source, epoch)
 
 		cancel()
 
+		if errors.Is(err, ErrStaleEpoch) {
+			return err
+		}
+
 		if err == nil {
 			count++
+			sealed[name] = true
 		}
 	}
 
-	if count < len(c.Nodes)/2+1 {
+	if count < len(table.Nodes)/2+1 {
 		return errors.New("seal majority unavailable")
+	}
+	// An unsealed holder must not serve a stale writer's data after takeover.
+	for shard, copies := range table.Shards {
+		for i, copy := range copies {
+			if !sealed[copy.Node] {
+				table.Shards[shard][i].State = "behind"
+			}
+		}
 	}
 
 	table.WriterEpochs[source] = epoch
@@ -593,7 +632,7 @@ func (c *Cluster) lockSource(ctx context.Context, source string) (func(), error)
 
 		call, cancel := c.timeout(ctx)
 
-		tx, err := c.Nodes[copy.Node].Store.ingest.Begin(call)
+		tx, err := c.Nodes[copy.Node].Store.coordination.Begin(call)
 		if err == nil {
 			_, err = tx.Exec(call, `SELECT pg_advisory_xact_lock(419032,hashtext($1))`, source)
 		}
@@ -608,7 +647,12 @@ func (c *Cluster) lockSource(ctx context.Context, source string) (func(), error)
 			continue
 		}
 
-		return func() { _ = tx.Rollback(context.Background()) }, nil
+		return func() {
+			release, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			_ = tx.Rollback(release)
+		}, nil
 	}
 
 	return nil, errors.New("source coordination unavailable")

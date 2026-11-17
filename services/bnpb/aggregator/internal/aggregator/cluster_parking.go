@@ -221,14 +221,21 @@ func (c *Cluster) event(ctx context.Context, id string) (HazardEvent, error) {
 
 		s := c.Nodes[copy.Node].Shards[shard]
 
-		tx, err := s.begin(ctx, true)
+		call, cancel := c.timeout(ctx)
+
+		tx, err := s.begin(call, true)
 		if err != nil {
+			cancel()
+
 			missing = true
+
 			continue
 		}
 
-		h, err := scanEvent(tx.QueryRow(ctx, `SELECT `+columns+` FROM hazard_events WHERE hazard_id=$1`, id))
-		_ = tx.Rollback(ctx)
+		h, err := scanEvent(tx.QueryRow(call, `SELECT `+columns+` FROM hazard_events WHERE hazard_id=$1`, id))
+		_ = tx.Rollback(call)
+
+		cancel()
 
 		if err == nil {
 			return h, nil

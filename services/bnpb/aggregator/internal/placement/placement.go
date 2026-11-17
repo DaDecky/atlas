@@ -13,6 +13,7 @@ type Copy struct {
 	Node  string `json:"node"`
 	State string `json:"state"`
 }
+
 type Table struct {
 	Generation   int64             `json:"generation"`
 	Nodes        []string          `json:"nodes"`
@@ -58,8 +59,14 @@ func score(shard, node string) uint64 {
 }
 
 func (t Table) Validate() error {
-	if t.Generation < 1 || len(t.Nodes) < 3 || len(t.Shards) != Shards {
+	if t.Generation < 1 || len(t.Nodes) < 3 || len(t.Shards) != Shards || t.WriterEpochs == nil {
 		return errors.New("invalid placement shape")
+	}
+
+	for source, epoch := range t.WriterEpochs {
+		if source == "" || epoch < 1 {
+			return errors.New("invalid writer epoch")
+		}
 	}
 
 	nodes := map[string]bool{}
