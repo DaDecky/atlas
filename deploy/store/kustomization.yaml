@@ -4,6 +4,7 @@ namespace: sistem-informasi-kebencanaan-bnpb
 resources:
   - service.yaml
   - statefulset.yaml
+  - placement-rbac.yaml
 configMapGenerator:
   - name: canonical-store-init
     files:
