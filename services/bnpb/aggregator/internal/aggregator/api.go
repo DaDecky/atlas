@@ -85,13 +85,13 @@ func parseQuery(r *http.Request) (Query, error) {
 
 		switch k {
 		case "source":
-			if v != "BMKG" && v != "PVMBG" {
+			if !validSource(v) {
 				return q, errors.New("source")
 			}
 
 			q.Source = v
 		case "hazard_type":
-			if v != "SEISMIC" && v != "VOLCANIC" {
+			if v != "SEISMIC" && v != "VOLCANIC" && v != "WILDFIRE" && v != "COASTAL" {
 				return q, errors.New("hazard type")
 			}
 
@@ -109,6 +109,8 @@ func parseQuery(r *http.Request) (Query, error) {
 			}
 
 			q.Since = &t
+		case "cursor":
+			q.Cursor = v
 		case "limit":
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 1 || n > 500 {
@@ -136,6 +138,8 @@ func (a *API) Handler() http.Handler {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 	})
 	mux.Get("/health", a.health)
+	mux.Get("/internal/analytics/summary", a.analytics)
+	mux.Get("/internal/analytics", analyticsPage)
 	mux.Get("/internal/hazards", a.hazards)
 
 	return mux
@@ -235,4 +239,9 @@ func (a *API) logRequest(next http.Handler) http.Handler {
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+func bearerMatches(r *http.Request, token string) bool {
+	value, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return token != "" && ok && subtle.ConstantTimeCompare([]byte(value), []byte(token)) == 1
 }
