@@ -90,14 +90,17 @@ func (s *Store) Health(ctx context.Context) error { return s.query.Ping(ctx) }
 
 func (s *Store) Checkpoint(ctx context.Context, source string) (*time.Time, error) {
 	var t *time.Time
+
 	tx, err := s.begin(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
+
 	if err = tx.QueryRow(ctx, `SELECT checkpoint FROM source_progress WHERE source = $1`, source).Scan(&t); err != nil {
 		return nil, err
 	}
+
 	return t, tx.Commit(ctx)
 }
 
@@ -223,7 +226,6 @@ func saveEvents(ctx context.Context, tx pgx.Tx, source string, events []HazardEv
 		}
 
 		changed = append(changed, stored)
-
 		if err = enqueueEvent(ctx, tx, stored, correlationID()); err != nil {
 			return nil, err
 		}
@@ -252,15 +254,30 @@ func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
 	}
 	defer tx.Rollback(ctx)
 
-	rows, err := tx.Query(ctx, `
-		SELECT `+columns+`
-		FROM hazard_events
-		WHERE ($1 = '' OR source = $1)
-			AND ($2 = '' OR hazard_type = $2)
-			AND ($3 = '' OR severity = $3)
-			AND ($4::timestamptz IS NULL OR occurred_at >= $4)
-		ORDER BY occurred_at DESC, hazard_id
-		LIMIT $5`, q.Source, q.HazardType, q.Severity, q.Since, q.Limit)
+	cursor, err := decodeCursor(q)
+	if err != nil {
+		return out, err
+	}
+
+	if q.Limit < 1 || q.Limit > 1000 {
+		return out, errors.New("limit must be between 1 and 1000")
+	}
+
+	timeColumn, order, comparison := "occurred_at", "occurred_at DESC, hazard_id", "(occurred_at < $6 OR (occurred_at = $6 AND hazard_id > $7))"
+	if q.Audit {
+		timeColumn, order, comparison = "ingested_at", "ingested_at ASC, hazard_id", "(ingested_at > $6 OR (ingested_at = $6 AND hazard_id > $7))"
+	}
+
+	var after *time.Time
+	if q.Cursor != "" {
+		after = &cursor.Time
+	}
+
+	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM hazard_events
+ WHERE ($1 = '' OR source = $1) AND ($2 = '' OR hazard_type = $2)
+ AND ($3 = '' OR severity = $3) AND ($4::timestamptz IS NULL OR `+timeColumn+` >= $4)
+ AND ($6::timestamptz IS NULL OR `+comparison+`)
+ ORDER BY `+order+` LIMIT $5`, q.Source, q.HazardType, q.Severity, q.Since, q.Limit+1, after, cursor.ID)
 	if err != nil {
 		return out, err
 	}
@@ -280,6 +297,12 @@ func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
 
 	if err != nil {
 		return out, err
+	}
+
+	if len(out.Data) > q.Limit {
+		out.Data = out.Data[:q.Limit]
+		next := encodeCursor(q, out.Data[len(out.Data)-1])
+		out.NextCursor = &next
 	}
 
 	for _, source := range sources(q) {

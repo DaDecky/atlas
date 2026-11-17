@@ -33,6 +33,8 @@ type Query struct {
 	Source, HazardType, Severity string
 	Since                        *time.Time
 	Limit                        int
+	Cursor                       string
+	Audit                        bool
 }
 
 type Response struct {
@@ -40,6 +42,7 @@ type Response struct {
 	Sources          []Freshness   `json:"sources"`
 	Partial          bool          `json:"partial"`
 	UnavailableUnits []string      `json:"unavailable_units"`
+	NextCursor       *string       `json:"next_cursor"`
 }
 
 func hazardID(source, ref string) string {
