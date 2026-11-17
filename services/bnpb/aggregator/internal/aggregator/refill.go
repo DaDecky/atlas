@@ -155,6 +155,31 @@ func copyShard(ctx context.Context, from, to *Store) error {
 		return err
 	}
 
+	parkingRows, err := tx.Query(ctx, `SELECT `+parkingColumns+` FROM unprocessed_messages ORDER BY message_id`)
+	if err != nil {
+		return err
+	}
+
+	for parkingRows.Next() {
+		m, err := scanParked(parkingRows)
+		if err != nil {
+			parkingRows.Close()
+			return err
+		}
+
+		if err = to.restoreParked(ctx, m); err != nil {
+			parkingRows.Close()
+			return err
+		}
+	}
+
+	err = parkingRows.Err()
+	parkingRows.Close()
+
+	if err != nil {
+		return err
+	}
+
 	for _, source := range []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"} {
 		var (
 			progress   Freshness
@@ -316,3 +341,19 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 	return c.Refill(ctx, shard, newNode)
 }
 
+func (s *Store) restoreParked(ctx context.Context, m ParkedMessage) error {
+	tx, err := s.begin(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `INSERT INTO unprocessed_messages (`+parkingColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+ ON CONFLICT(message_id) DO UPDATE SET status=CASE WHEN unprocessed_messages.status='recovered' THEN 'recovered' ELSE EXCLUDED.status END,
+ attempts=GREATEST(unprocessed_messages.attempts,EXCLUDED.attempts),next_attempt_at=EXCLUDED.next_attempt_at`, m.MessageID, m.Source, m.ReceivedAt, m.SourceRefID, m.Raw, m.RawLength, m.RawSHA256, m.RawCut, m.ReasonCode, m.Reason, m.Retryable, m.Attempts, m.NextAttemptAt, m.Status, m.CorrelationID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
