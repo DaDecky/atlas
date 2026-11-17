@@ -36,8 +36,10 @@ type Query struct {
 }
 
 type Response struct {
-	Data    []HazardEvent `json:"data"`
-	Sources []Freshness   `json:"sources"`
+	Data             []HazardEvent `json:"data"`
+	Sources          []Freshness   `json:"sources"`
+	Partial          bool          `json:"partial"`
+	UnavailableUnits []string      `json:"unavailable_units"`
 }
 
 func hazardID(source, ref string) string {
@@ -58,5 +60,13 @@ func sources(q Query) []string {
 		return []string{"PVMBG"}
 	}
 
-	return []string{"BMKG", "PVMBG"}
+	if q.HazardType == "WILDFIRE" {
+		return []string{"SATELIT"}
+	}
+
+	if q.HazardType == "COASTAL" {
+		return []string{"SENSOR_PANTAI"}
+	}
+
+	return []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"}
 }

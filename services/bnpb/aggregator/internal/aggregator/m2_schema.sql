@@ -1,0 +1,31 @@
+-- Apply to existing M1 databases as well as fresh databases. Transactional DDL
+-- and the advisory lock serialize concurrent Aggregator startup migrations.
+BEGIN;
+SELECT pg_advisory_xact_lock(419031, 2);
+
+ALTER TABLE hazard_events DROP CONSTRAINT IF EXISTS hazard_events_source_check;
+ALTER TABLE hazard_events ADD CONSTRAINT hazard_events_source_check
+    CHECK (source IN ('BMKG', 'PVMBG', 'SATELIT', 'SENSOR_PANTAI'));
+ALTER TABLE hazard_events DROP CONSTRAINT IF EXISTS hazard_events_hazard_type_check;
+ALTER TABLE hazard_events ADD CONSTRAINT hazard_events_hazard_type_check
+    CHECK (hazard_type IN ('SEISMIC', 'VOLCANIC', 'WILDFIRE', 'COASTAL'));
+ALTER TABLE source_progress DROP CONSTRAINT IF EXISTS source_progress_source_check;
+ALTER TABLE source_progress ADD CONSTRAINT source_progress_source_check
+    CHECK (source IN ('BMKG', 'PVMBG', 'SATELIT', 'SENSOR_PANTAI'));
+
+INSERT INTO source_progress (source) VALUES ('SATELIT'), ('SENSOR_PANTAI')
+    ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS source_fence (
+    source text PRIMARY KEY REFERENCES source_progress(source),
+    epoch bigint NOT NULL CHECK (epoch > 0)
+);
+INSERT INTO source_fence (source, epoch)
+    SELECT source, 1 FROM source_progress ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS stream_state (
+    source text PRIMARY KEY REFERENCES source_progress(source),
+    committed_offset bigint NOT NULL CHECK (committed_offset >= 0),
+    payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object')
+);
+COMMIT;

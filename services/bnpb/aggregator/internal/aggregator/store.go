@@ -21,6 +21,9 @@ const columns = `hazard_id, source, source_ref_id, hazard_type, severity, area_n
 //go:embed schema.sql
 var schema string
 
+//go:embed m2_schema.sql
+var m2Schema string
+
 func openPool(ctx context.Context, url string, size int32) (*pgxpool.Pool, error) {
 	c, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -57,6 +60,11 @@ func OpenStore(ctx context.Context, url string, ingestSize, querySize int32) (*S
 
 	s := &Store{i, q}
 	if _, err = i.Exec(ctx, schema); err != nil {
+		s.Close()
+		return nil, err
+	}
+
+	if _, err = i.Exec(ctx, m2Schema); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -155,6 +163,22 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 	}
 	defer tx.Rollback(ctx)
 
+	changed, err := saveEvents(ctx, tx, source, events, checkpoint, now)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return changed, nil
+}
+
+func saveEvents(ctx context.Context, tx pgx.Tx, source string, events []HazardEvent, checkpoint *time.Time, now time.Time) (
+	[]HazardEvent,
+	error,
+) {
 	changed := []HazardEvent{}
 
 	for _, h := range events {
@@ -193,7 +217,7 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 		changed = append(changed, stored)
 	}
 
-	_, err = tx.Exec(ctx, `
+	_, err := tx.Exec(ctx, `
 		UPDATE source_progress
 		SET checkpoint = CASE WHEN $2::timestamptz IS NULL THEN checkpoint
 				ELSE GREATEST(checkpoint, $2::timestamptz) END,
@@ -204,15 +228,11 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 		return nil, err
 	}
 
-	if err = tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-
 	return changed, nil
 }
 
 func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
-	out := Response{Data: []HazardEvent{}, Sources: []Freshness{}}
+	out := Response{Data: []HazardEvent{}, Sources: []Freshness{}, UnavailableUnits: []string{}}
 	// Snapshot data and freshness together so a concurrent ingestion cannot mix outcomes.
 	tx, err := s.query.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {

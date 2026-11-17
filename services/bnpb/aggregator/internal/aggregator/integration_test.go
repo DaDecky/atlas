@@ -34,7 +34,8 @@ func integrationStore(t *testing.T) *Store {
 	}
 
 	const reset = `
-		TRUNCATE hazard_events;
+		TRUNCATE hazard_events, stream_state;
+		UPDATE source_fence SET epoch = 1;
 		UPDATE source_progress SET checkpoint = NULL, last_success_at = NULL, stale_since = NULL`
 	if _, err = s.ingest.Exec(ctx, reset); err != nil {
 		t.Fatal(err)
