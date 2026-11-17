@@ -27,11 +27,12 @@ type ShardStore interface {
 // WriteBatch belongs to exactly one source and one sealed writer epoch.
 // Now is the successful ingestion time, supplied by the caller for reproducibility.
 type WriteBatch struct {
-	Source       string
-	Epoch        int64
-	Events       []HazardEvent
-	Now          time.Time
-	sourceLocked bool
+	Source             string
+	Epoch              int64
+	Events             []HazardEvent
+	Now                time.Time
+	sourceLocked       bool
+	timestampsAssigned bool
 }
 
 // StreamState is an opaque JSON object owned by the source adapter. Offset and
@@ -197,7 +198,7 @@ func (s *Store) commitBatch(ctx context.Context, batch WriteBatch, checkpoint *t
 		}
 	}
 
-	changed, err := saveEvents(ctx, tx, batch.Source, batch.Events, checkpoint, batch.Now)
+	changed, err := saveEvents(ctx, tx, batch.Source, batch.Events, checkpoint, batch.Now, batch.timestampsAssigned)
 	if err != nil {
 		return nil, err
 	}

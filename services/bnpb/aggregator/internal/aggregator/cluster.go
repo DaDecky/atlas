@@ -198,6 +198,15 @@ func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time
 		defer release()
 	}
 
+	table, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if table.WriterEpochs[b.Source] != b.Epoch {
+		return nil, ErrStaleEpoch
+	}
+
 	if state != nil {
 		prior, err := c.LoadState(ctx, b.Source)
 		if err == nil && prior.Offset >= state.Offset {
@@ -209,13 +218,8 @@ func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time
 		}
 	}
 
-	table, _, err := c.Placement.Load(ctx)
-	if err != nil {
+	if err := c.assignIngestionTimes(ctx, &b); err != nil {
 		return nil, err
-	}
-
-	if table.WriterEpochs[b.Source] != b.Epoch {
-		return nil, ErrStaleEpoch
 	}
 	// Events commit idempotently before progress; an interrupted distributed batch
 	// resumes from prior state. It is not a distributed SQL transaction.

@@ -29,6 +29,9 @@ func validateBatch(b WriteBatch) error {
 			return errors.New("invalid severity")
 		}
 
+		if h.Latitude < -90 || h.Latitude > 90 || h.Longitude < -180 || h.Longitude > 180 {
+			return errors.New("coordinates out of range")
+		}
 		if math.IsNaN(h.Latitude) || math.IsNaN(h.Longitude) || math.IsInf(h.Latitude, 0) || math.IsInf(h.Longitude, 0) {
 			return errors.New("non-finite coordinates")
 		}

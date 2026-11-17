@@ -34,6 +34,7 @@ func openPool(ctx context.Context, url string, size int32) (*pgxpool.Pool, error
 	}
 
 	c.MaxConns = size
+	c.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	c.ConnConfig.ConnectTimeout = 2 * time.Second
 
 	p, err := pgxpool.NewWithConfig(ctx, c)
@@ -186,13 +187,20 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 	return changed, nil
 }
 
-func saveEvents(ctx context.Context, tx pgx.Tx, source string, events []HazardEvent, checkpoint *time.Time, now time.Time) (
+func saveEvents(ctx context.Context, tx pgx.Tx, source string, events []HazardEvent, checkpoint *time.Time, now time.Time, assigned ...bool) (
 	[]HazardEvent,
 	error,
 ) {
 	changed := []HazardEvent{}
 
-	for _, h := range events {
+	normalized := append([]HazardEvent(nil), events...)
+	if len(assigned) == 0 || !assigned[0] {
+		if err := normalizeEvents(ctx, tx, normalized); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, h := range normalized {
 		raw, err := json.Marshal(h.Attributes)
 		if err != nil {
 			return nil, err
