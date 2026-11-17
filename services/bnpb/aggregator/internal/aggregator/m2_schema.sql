@@ -28,4 +28,6 @@ CREATE TABLE IF NOT EXISTS stream_state (
     committed_offset bigint NOT NULL CHECK (committed_offset >= 0),
     payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object')
 );
+ALTER TABLE hazard_events ALTER COLUMN source_ref_id TYPE text COLLATE "C";
+CREATE INDEX IF NOT EXISTS hazard_ingested ON hazard_events (ingested_at, hazard_id);
 COMMIT;

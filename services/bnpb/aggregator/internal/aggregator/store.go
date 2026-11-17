@@ -13,7 +13,10 @@ import (
 )
 
 // Ingestion and reads have separate pools so polling cannot consume read capacity.
-type Store struct{ ingest, query *pgxpool.Pool }
+type Store struct {
+	ingest, query *pgxpool.Pool
+	namespace     string
+}
 
 const columns = `hazard_id, source, source_ref_id, hazard_type, severity, area_name,
 	latitude, longitude, occurred_at, ingested_at, attributes, revision`
@@ -58,7 +61,7 @@ func OpenStore(ctx context.Context, url string, ingestSize, querySize int32) (*S
 		return nil, err
 	}
 
-	s := &Store{i, q}
+	s := &Store{ingest: i, query: q}
 	if _, err = i.Exec(ctx, schema); err != nil {
 		s.Close()
 		return nil, err
@@ -87,10 +90,15 @@ func (s *Store) Health(ctx context.Context) error { return s.query.Ping(ctx) }
 
 func (s *Store) Checkpoint(ctx context.Context, source string) (*time.Time, error) {
 	var t *time.Time
-
-	err := s.ingest.QueryRow(ctx, `SELECT checkpoint FROM source_progress WHERE source = $1`, source).Scan(&t)
-
-	return t, err
+	tx, err := s.begin(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if err = tx.QueryRow(ctx, `SELECT checkpoint FROM source_progress WHERE source = $1`, source).Scan(&t); err != nil {
+		return nil, err
+	}
+	return t, tx.Commit(ctx)
 }
 
 func (s *Store) Failure(ctx context.Context, source string, now time.Time) error {
@@ -157,7 +165,7 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 	[]HazardEvent,
 	error,
 ) {
-	tx, err := s.ingest.Begin(ctx)
+	tx, err := s.begin(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +242,7 @@ func saveEvents(ctx context.Context, tx pgx.Tx, source string, events []HazardEv
 func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
 	out := Response{Data: []HazardEvent{}, Sources: []Freshness{}, UnavailableUnits: []string{}}
 	// Snapshot data and freshness together so a concurrent ingestion cannot mix outcomes.
-	tx, err := s.query.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := s.begin(ctx, true)
 	if err != nil {
 		return out, err
 	}

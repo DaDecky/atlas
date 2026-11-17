@@ -62,7 +62,7 @@ var _ ShardStore = (*Store)(nil)
 func (s *Store) Epoch(ctx context.Context, source string) (int64, error) {
 	var epoch int64
 
-	err := s.ingest.QueryRow(ctx, `SELECT epoch FROM source_fence WHERE source = $1`, source).Scan(&epoch)
+	err := s.ingest.QueryRow(ctx, `SELECT epoch FROM public.source_fence WHERE source = $1`, source).Scan(&epoch)
 
 	return epoch, err
 }
@@ -77,7 +77,7 @@ func (s *Store) Seal(ctx context.Context, source string, epoch int64) error {
 	var sealed int64
 
 	err := s.ingest.QueryRow(ctx, `
-		UPDATE source_fence SET epoch = $2
+		UPDATE public.source_fence SET epoch = $2
 		WHERE source = $1 AND epoch <= $2
 		RETURNING epoch`, source, epoch).Scan(&sealed)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -114,12 +114,16 @@ func (s *Store) CommitState(ctx context.Context, batch WriteBatch, state StreamS
 // LoadState returns pgx.ErrNoRows before the first committed state.
 func (s *Store) LoadState(ctx context.Context, source string) (StreamState, error) {
 	var state StreamState
-
-	err := s.query.QueryRow(ctx, `
-		SELECT committed_offset, payload FROM stream_state WHERE source = $1`, source).
-		Scan(&state.Offset, &state.Payload)
-
-	return state, err
+	tx, err := s.begin(ctx, true)
+	if err != nil {
+		return state, err
+	}
+	defer tx.Rollback(ctx)
+	err = tx.QueryRow(ctx, `SELECT committed_offset, payload FROM stream_state WHERE source = $1`, source).Scan(&state.Offset, &state.Payload)
+	if err != nil {
+		return state, err
+	}
+	return state, tx.Commit(ctx)
 }
 
 // MarkBehind cannot succeed until replicated placement exists. Returning an
@@ -146,7 +150,7 @@ func (s *Store) commitBatch(ctx context.Context, batch WriteBatch, checkpoint *t
 		}
 	}
 
-	tx, err := s.ingest.Begin(ctx)
+	tx, err := s.begin(ctx, false)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +158,7 @@ func (s *Store) commitBatch(ctx context.Context, batch WriteBatch, checkpoint *t
 
 	var epoch int64
 	// Serialize source commits, including state-offset checks, with takeover.
-	err = tx.QueryRow(ctx, `SELECT epoch FROM source_fence WHERE source = $1 FOR UPDATE`, batch.Source).Scan(&epoch)
+	err = tx.QueryRow(ctx, `SELECT epoch FROM public.source_fence WHERE source = $1 FOR UPDATE`, batch.Source).Scan(&epoch)
 	if err != nil {
 		return nil, fmt.Errorf("lock source fence: %w", err)
 	}
