@@ -34,6 +34,7 @@ func enqueueEvent(ctx context.Context, tx pgx.Tx, h HazardEvent, id string) erro
 func (s *Store) RelayOne(ctx context.Context, p EventPublisher) (bool, error) {
 	return s.relayOne(ctx, p, false)
 }
+
 func (s *Store) relayOne(ctx context.Context, p EventPublisher, criticalOnly bool) (bool, error) {
 	tx, err := s.ingest.Begin(ctx)
 	if err != nil {

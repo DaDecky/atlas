@@ -35,36 +35,46 @@ func (r *relayRecorder) PublishCritical(_ context.Context, p Publication) error 
 
 	return nil
 }
+
 func (r *relayRecorder) Close() {}
 
 func TestIntegrationOutboxAtomicPriorityAndRetry(t *testing.T) {
 	s := integrationStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
+
 	regular := contractEvent("BMKG", "regular", now)
 	if _, err := s.Save(ctx, "BMKG", []HazardEvent{regular}, nil, now); err != nil {
 		t.Fatal(err)
 	}
+
 	critical := contractEvent("SENSOR_PANTAI", "critical", now)
+
 	critical.Attributes["critical"] = []byte(`true`)
 	if _, err := s.Upsert(ctx, WriteBatch{Source: "SENSOR_PANTAI", Epoch: 1, Events: []HazardEvent{critical}, Now: now}); err != nil {
 		t.Fatal(err)
 	}
+
 	r := &relayRecorder{fail: true}
 	if _, err := s.RelayOne(ctx, r); err == nil {
 		t.Fatal("failed confirmation acknowledged")
 	}
+
 	r.fail = false
+
 	r.sent = nil
 	if sent, err := s.RelayOne(ctx, r); err != nil || !sent {
 		t.Fatal(sent, err)
 	}
+
 	if len(r.sent) != 2 || r.sent[0] != "critical:"+critical.HazardID || r.sent[1] != critical.HazardID {
 		t.Fatal("critical lane not first", r.sent)
 	}
+
 	if sent, err := s.RelayOne(ctx, r); err != nil || !sent {
 		t.Fatal(sent, err)
 	}
+
 	if sent, err := s.RelayOne(ctx, r); err != nil || sent {
 		t.Fatal("outbox not drained", sent, err)
 	}

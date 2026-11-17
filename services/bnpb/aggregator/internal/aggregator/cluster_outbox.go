@@ -20,7 +20,7 @@ func (c *Cluster) RelayOne(ctx context.Context, p EventPublisher) (bool, error) 
 				last = err
 			}
 		}
-
 	}
+
 	return false, last
 }
