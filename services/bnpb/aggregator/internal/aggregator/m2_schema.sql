@@ -30,4 +30,20 @@ CREATE TABLE IF NOT EXISTS stream_state (
 );
 ALTER TABLE hazard_events ALTER COLUMN source_ref_id TYPE text COLLATE "C";
 CREATE INDEX IF NOT EXISTS hazard_ingested ON hazard_events (ingested_at, hazard_id);
+CREATE TABLE IF NOT EXISTS publication_outbox (
+ hazard_id text NOT NULL, revision bigint NOT NULL, payload jsonb NOT NULL,
+ correlation_id text NOT NULL, critical boolean NOT NULL DEFAULT false,
+ created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(hazard_id,revision)
+);
+CREATE INDEX IF NOT EXISTS outbox_priority ON publication_outbox(critical DESC,created_at,hazard_id,revision);
+CREATE TABLE IF NOT EXISTS unprocessed_messages (
+ message_id text PRIMARY KEY, source text NOT NULL, received_at timestamptz NOT NULL,
+ source_ref_id text NOT NULL DEFAULT '', raw bytea NOT NULL, raw_length bigint NOT NULL,
+ raw_sha256 text NOT NULL, raw_cut boolean NOT NULL DEFAULT false,
+ reason_code text NOT NULL, reason text NOT NULL, retryable boolean NOT NULL,
+ attempts integer NOT NULL DEFAULT 0, next_attempt_at timestamptz,
+ status text NOT NULL CHECK(status IN ('retrying','parked','recovered')),
+ correlation_id text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS parking_pending ON unprocessed_messages(source,received_at,message_id) WHERE status <> 'recovered';
 COMMIT;

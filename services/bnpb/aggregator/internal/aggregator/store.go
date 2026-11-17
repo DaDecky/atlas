@@ -223,6 +223,10 @@ func saveEvents(ctx context.Context, tx pgx.Tx, source string, events []HazardEv
 		}
 
 		changed = append(changed, stored)
+
+		if err = enqueueEvent(ctx, tx, stored, correlationID()); err != nil {
+			return nil, err
+		}
 	}
 
 	_, err := tx.Exec(ctx, `

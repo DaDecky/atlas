@@ -205,8 +205,13 @@ func TestIntegrationSavePublishProcessCrash(t *testing.T) {
 		t.Fatal("unexpected replay after recovery", ok, err)
 	}
 
+	var pendingCount int
+	if err = s.ingest.QueryRow(ctx, `SELECT count(*) FROM publication_outbox WHERE hazard_id=$1`, lostID).Scan(&pendingCount); err != nil || pendingCount != 1 {
+		t.Fatal("crashed publication not durable", pendingCount, err)
+	}
+
 	t.Logf(
-		"process_exit=77 committed_hazard_id=%s checkpoint=%s replay_publications=0 control_hazard_id=%s confirmed=true; known M1 save/publish loss reproduced",
+		"process_exit=77 committed_hazard_id=%s checkpoint=%s replay_publications=0 control_hazard_id=%s confirmed=true; outbox retains committed publication across process crash",
 		lostID, cp.Format(time.RFC3339), item.Event.HazardID,
 	)
 }
