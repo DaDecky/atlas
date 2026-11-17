@@ -21,6 +21,7 @@ type Lease struct {
 	observed                               string
 	since                                  time.Time
 }
+
 type leaseDocument struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`

@@ -20,6 +20,7 @@ type AuditData interface {
 	Checksum(context.Context, string) (Checksum, error)
 	Location(context.Context, string) (LocationResult, error)
 }
+
 type Checksum struct {
 	Source           string    `json:"source"`
 	Count            int64     `json:"count"`
@@ -29,16 +30,19 @@ type Checksum struct {
 	Partial          bool      `json:"partial"`
 	UnavailableUnits []string  `json:"unavailable_units"`
 }
+
 type Location struct {
 	Node string `json:"node"`
 	Unit string `json:"unit"`
 	Role string `json:"role"`
 }
+
 type LocationResult struct {
 	HazardID  string     `json:"hazard_id"`
 	Locations []Location `json:"locations"`
 	Partial   bool       `json:"partial"`
 }
+
 type AuditAPI struct {
 	Store   AuditData
 	Token   string

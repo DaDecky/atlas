@@ -29,10 +29,12 @@ type ParkedMessage struct {
 	Status        string     `json:"status"`
 	CorrelationID string     `json:"correlation_id"`
 }
+
 type ParkingPage struct {
 	Items      []ParkedMessage `json:"items"`
 	NextCursor *string         `json:"next_cursor"`
 }
+
 type Parking interface {
 	Park(context.Context, ParkedMessage) error
 	ListUnprocessed(context.Context, string, string, int) (ParkingPage, error)

@@ -14,6 +14,7 @@ type AnalyticsBucket struct {
 	Type  string `json:"type"`
 	Count int    `json:"count"`
 }
+
 type AnalyticsSummary struct {
 	Total            int               `json:"total"`
 	Timeline         []AnalyticsBucket `json:"timeline"`
@@ -140,7 +141,9 @@ func (a *API) analytics(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, 200, result)
 }
+
 func (a *API) authorized(r *http.Request) bool { return bearerMatches(r, a.Token) }
+
 func analyticsPage(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(analyticsHTML))
