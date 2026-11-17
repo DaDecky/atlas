@@ -4,8 +4,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -56,29 +54,37 @@ func run() error {
 		if url == "" {
 			return fmt.Errorf("DATABASE_URL required for export-m1")
 		}
+
 		ctx := context.Background()
+
 		store, err := aggregator.OpenStore(ctx, url, 2, 4)
 		if err != nil {
 			return err
 		}
 		defer store.Close()
+
 		encoder := json.NewEncoder(os.Stdout)
+
 		query := aggregator.Query{Limit: 1000, Audit: true}
 		for {
 			page, err := store.Read(ctx, query)
 			if err != nil {
 				return err
 			}
+
 			for _, event := range page.Data {
 				if err = encoder.Encode(event); err != nil {
 					return err
 				}
 			}
+
 			if page.NextCursor == nil {
 				break
 			}
+
 			query.Cursor = *page.NextCursor
 		}
+
 		return nil
 	}
 
@@ -92,9 +98,8 @@ func run() error {
 
 		for i := 0; i < *count; i++ {
 			ref := fmt.Sprintf("%s-%08d", *prefix, i)
-			sum := sha256.Sum256([]byte("BMKG\x00" + ref))
 
-			event := aggregator.HazardEvent{HazardID: hex.EncodeToString(sum[:]), Source: "BMKG", SourceRefID: ref, HazardType: "SEISMIC", Severity: "WASPADA", AreaName: *region, Latitude: -6.9 + float64(i%100)/10000, Longitude: 107.6, OccurredAt: base.Add(time.Duration(i) * time.Second), IngestedAt: base.Add(time.Duration(i) * time.Millisecond), Attributes: map[string]json.RawMessage{"magnitude": json.RawMessage(`5.1`)}}
+			event := aggregator.HazardEvent{HazardID: aggregator.CanonicalHazardID("BMKG", ref), Source: "BMKG", SourceRefID: ref, HazardType: "SEISMIC", Severity: "WASPADA", AreaName: *region, Latitude: -6.9 + float64(i%100)/10000, Longitude: 107.6, OccurredAt: base.Add(time.Duration(i) * time.Second), IngestedAt: base.Add(time.Duration(i) * time.Millisecond), Attributes: map[string]json.RawMessage{"magnitude": json.RawMessage(`5.1`)}}
 			if err := encoder.Encode(event); err != nil {
 				return err
 			}
@@ -169,7 +174,9 @@ func run() error {
 				return err
 			}
 		}
+
 		batch.Source = h.Source
+
 		batch.Events = append(batch.Events, h)
 		if len(batch.Events) == 100 {
 			if err = flush(); err != nil {

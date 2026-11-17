@@ -73,3 +73,7 @@ func sources(q Query) []string {
 
 	return []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"}
 }
+
+// CanonicalHazardID is shared by source adapters and data tools. A replay must
+// retain the same source/reference pair to address the same canonical event.
+func CanonicalHazardID(source, ref string) string { return hazardID(source, ref) }
