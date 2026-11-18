@@ -1,0 +1,9 @@
+# Test fixtures and the integration tests' throwaway service passwords are not secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and disposable CI service credentials"
+paths = ["_test[.]go$"]
+regexTarget = "match"
+regexes = ["://[a-z]+:ci-[a-z]+@"]
