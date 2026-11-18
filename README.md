@@ -4,7 +4,7 @@ Disaster coordination services for BMKG, PVMBG, and BNPB. M1 runs each component
 
 ## Run
 
-Install Docker with Compose, Go 1.27.2, GNU Make, Bash, and OpenSSL. On Windows, use WSL or Git Bash. Create `.env` with fresh secrets and a new Ed25519 signing pair.
+Install Docker with Compose, Go 1.27.4, GNU Make, Bash, and OpenSSL. On Windows, use WSL or Git Bash. Create `.env` with fresh secrets and a new Ed25519 signing pair.
 
 ```sh
 make env
