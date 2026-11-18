@@ -10,5 +10,5 @@ RUN adduser -D -u 10001 atlas
 COPY --from=build /client-api /usr/local/bin/client-api
 USER atlas
 EXPOSE 8080
-HEALTHCHECK --interval=10s --timeout=3s CMD wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
 ENTRYPOINT ["client-api"]
