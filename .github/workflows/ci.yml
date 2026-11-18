@@ -28,7 +28,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.27.2'
+          go-version: '1.27.4'
           # Every module has its own go.sum, and none sits at the repo root.
           cache-dependency-path: '**/go.sum'
       - run: make ${{ matrix.target }}
