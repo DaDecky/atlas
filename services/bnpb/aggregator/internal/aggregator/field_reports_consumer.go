@@ -96,6 +96,7 @@ func (c *FieldReportsConsumer) session(ctx context.Context) error {
 			cancel()
 
 			if err != nil {
+				// Requeue keeps every report. Only the Client API publishes here, under the same contract.
 				_ = delivery.Nack(false, true)
 				return err
 			}
