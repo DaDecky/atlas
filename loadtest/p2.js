@@ -2,6 +2,8 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter, Rate } from 'k6/metrics';
 
+import { clientSession } from './session.js';
+
 const baseURL = __ENV.BASE_URL || 'http://localhost:8080';
 const authURL = __ENV.AUTH_URL || 'http://localhost:8084';
 
@@ -12,7 +14,6 @@ const thinkTime = Number(__ENV.THINK_TIME || 0);
 
 const unexpectedErrors = new Rate('unexpected_errors');
 const controlledRejections = new Counter('controlled_rejections');
-const authFailures = new Counter('auth_failures');
 
 const kinds = burst ? ['bmkg'] : ['bmkg', 'volcanic'];
 
@@ -47,42 +48,7 @@ export const options = {
   thresholds,
 };
 
-const authParams = { headers: { 'Content-Type': 'application/json' }, tags: { kind: 'auth' } };
-
-// Module scope is per VU, so each VU keeps its own Auth session.
-let session = null;
-
-function accessToken() {
-  if (session && Date.now() < session.refreshAt) {
-    return session.access;
-  }
-
-  const res = session
-    ? http.post(`${authURL}/auth/refresh`, JSON.stringify({ refresh_token: session.refresh }), authParams)
-    : http.post(
-        `${authURL}/auth/login`,
-        JSON.stringify({ client_id: __ENV.CLIENT_ID, client_secret: __ENV.CLIENT_SECRET }),
-        authParams,
-      );
-
-  if (res.status !== 200) {
-    authFailures.add(1);
-    session = null;
-
-    return null;
-  }
-
-  const body = res.json();
-
-  // Refresh at 75% of the TTL so a token never expires mid-request.
-  session = {
-    access: body.access_token,
-    refresh: body.refresh_token,
-    refreshAt: Date.now() + body.expires_in * 750,
-  };
-
-  return session.access;
-}
+const accessToken = clientSession(authURL, __ENV.CLIENT_ID, __ENV.CLIENT_SECRET);
 
 function readHazards(kind, query) {
   const token = accessToken();
