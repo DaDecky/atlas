@@ -98,8 +98,8 @@ func (a *API) setSchemaVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if in.Version == nil || *in.Version != 1 && *in.Version != 2 {
-		writeError(w, http.StatusBadRequest, "version_must_be_1_or_2")
+	if in.Version == nil || *in.Version < 1 || *in.Version > 5 {
+		writeError(w, http.StatusBadRequest, "version_must_be_1_to_5")
 		return
 	}
 

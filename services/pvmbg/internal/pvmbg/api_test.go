@@ -347,7 +347,7 @@ func TestSchemaChangeAtRuntime(t *testing.T) {
 		`{}`,
 		`null`,
 		`{"version":0}`,
-		`{"version":3}`,
+		`{"version":6}`,
 		`{"version":"2"}`,
 		`{"version":2.5}`,
 		`{"version":2,"extra":1}`,

@@ -33,10 +33,11 @@ func (g *Generator) Next(now time.Time, schemaVersion int) VolcanicReport {
 	level := [10]int{0, 0, 0, 0, 1, 1, 1, 2, 2, 3}[g.rng.IntN(10)]
 
 	report := VolcanicReport{
-		ReportID:   fmt.Sprintf("pvmbg-%d-%06d", g.boot, g.seq),
-		VolcanoID:  volcanoIDs[g.rng.IntN(len(volcanoIDs))],
-		AlertLevel: alertLevels[level],
-		ReportedAt: now.UTC().Truncate(time.Millisecond),
+		ReportID:      fmt.Sprintf("pvmbg-%d-%06d", g.boot, g.seq),
+		VolcanoID:     volcanoIDs[g.rng.IntN(len(volcanoIDs))],
+		AlertLevel:    alertLevels[level],
+		ReportedAt:    now.UTC().Truncate(time.Millisecond),
+		SchemaVersion: schemaVersion,
 	}
 	if level > 0 {
 		report.EruptionCount24h = g.rng.IntN(level * 15)

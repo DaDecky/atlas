@@ -69,12 +69,12 @@ func (s *PostgresStore) Add(ctx context.Context, r VolcanicReport) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO volcanic_reports (
 			report_id, volcano_id, alert_level, eruption_count_24h,
-			ash_column_height_m, reported_at, confidence_level
+			ash_column_height_m, reported_at, confidence_level, wire_schema_version
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		ON CONFLICT (report_id) DO NOTHING`,
 		r.ReportID, r.VolcanoID, r.AlertLevel, r.EruptionCount24h,
-		r.AshColumnHeightM, r.ReportedAt, r.ConfidenceLevel,
+		r.AshColumnHeightM, r.ReportedAt, r.ConfidenceLevel, max(1, r.SchemaVersion),
 	)
 
 	return err
@@ -84,7 +84,7 @@ func (s *PostgresStore) Add(ctx context.Context, r VolcanicReport) error {
 func (s *PostgresStore) Reports(ctx context.Context, since *time.Time) ([]VolcanicReport, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT report_id, volcano_id, alert_level, eruption_count_24h,
-			ash_column_height_m, reported_at, confidence_level
+			ash_column_height_m, reported_at, confidence_level, wire_schema_version
 		FROM volcanic_reports
 		WHERE $1::timestamptz IS NULL OR reported_at >= $1
 		ORDER BY reported_at, report_id`, since)
@@ -99,7 +99,7 @@ func (s *PostgresStore) Reports(ctx context.Context, since *time.Time) ([]Volcan
 		var r VolcanicReport
 		if err := rows.Scan(
 			&r.ReportID, &r.VolcanoID, &r.AlertLevel, &r.EruptionCount24h,
-			&r.AshColumnHeightM, &r.ReportedAt, &r.ConfidenceLevel,
+			&r.AshColumnHeightM, &r.ReportedAt, &r.ConfidenceLevel, &r.SchemaVersion,
 		); err != nil {
 			return nil, err
 		}

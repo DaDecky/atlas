@@ -16,3 +16,9 @@ CREATE TABLE IF NOT EXISTS schema_state (
 );
 
 INSERT INTO schema_state DEFAULT VALUES ON CONFLICT DO NOTHING;
+
+-- Repeatable M1 upgrade; existing reports keep their original wire shape.
+ALTER TABLE volcanic_reports ADD COLUMN IF NOT EXISTS wire_schema_version integer
+    NOT NULL DEFAULT 1 CHECK (wire_schema_version BETWEEN 1 AND 5);
+ALTER TABLE schema_state DROP CONSTRAINT IF EXISTS schema_state_version_check;
+ALTER TABLE schema_state ADD CONSTRAINT schema_state_version_check CHECK (version BETWEEN 1 AND 5);
