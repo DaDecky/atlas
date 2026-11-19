@@ -109,7 +109,7 @@ func (s *Store) relayOne(ctx context.Context, p EventPublisher, criticalOnly boo
 	if publishErr != nil {
 		// The broker may have exhausted the caller's deadline. Persist the failed
 		// attempt under a separate bounded context so timeouts cannot poison the head.
-		record, cancel := context.WithTimeout(context.WithoutCancel(ctx), shardDeadline)
+		record, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultShardDeadline)
 		defer cancel()
 
 		attempts++

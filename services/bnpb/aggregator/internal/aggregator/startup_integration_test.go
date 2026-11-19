@@ -58,7 +58,7 @@ func TestDataIntegrationConcurrentFreshNodeInitialization(t *testing.T) {
 		wg.Go(func() {
 			<-start
 
-			node, err := OpenDataNode(ctx, "fresh", config.String())
+			node, err := OpenDataNode(ctx, "fresh", config.String(), DefaultClusterLimits())
 			if err != nil {
 				t.Error("simultaneous fresh rollout failed", err)
 				return

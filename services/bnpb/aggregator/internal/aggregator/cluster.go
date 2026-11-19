@@ -26,12 +26,19 @@ type DataNode struct {
 type Cluster struct {
 	Nodes     map[string]*DataNode
 	Placement placement.Repository
-	Deadline  time.Duration
+	Limits    ClusterLimits
+}
+
+// ClusterLimits bound each copy call and the pools of each data node.
+type ClusterLimits struct {
+	ShardDeadline, HedgeDelay time.Duration
+	ReadWorkers               int
+	IngestPool, QueryPool     int32
 }
 
 var _ ShardStore = (*Cluster)(nil)
 
-func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
+func OpenDataNode(ctx context.Context, name, url string, limits ClusterLimits) (*DataNode, error) {
 	// A fresh Kubernetes rollout can initialize the same node concurrently.
 	// CREATE TABLE IF NOT EXISTS alone does not serialize PostgreSQL catalogue
 	// inserts. Hold a node-local bootstrap lock across the base and shard DDL.
@@ -51,7 +58,7 @@ func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
 		return nil, err
 	}
 
-	s, err := OpenStore(ctx, url, 4, 8, defaultDBConnectTimeout)
+	s, err := OpenStore(ctx, url, limits.IngestPool, limits.QueryPool, defaultDBConnectTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -81,12 +88,7 @@ func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
 }
 
 func (c *Cluster) timeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	d := c.Deadline
-	if d <= 0 {
-		d = shardDeadline
-	}
-
-	return context.WithTimeout(ctx, d)
+	return context.WithTimeout(ctx, c.Limits.ShardDeadline)
 }
 
 func (c *Cluster) Health(ctx context.Context) error {
@@ -421,7 +423,7 @@ func (c *Cluster) fanout(ctx context.Context, read func(context.Context, *Store)
 
 	events := []HazardEvent{}
 	unavailable := []string{}
-	sem := make(chan struct{}, shardReadWorkers)
+	sem := make(chan struct{}, c.Limits.ReadWorkers)
 
 	for shard, copies := range t.Shards {
 		wg.Go(func() {

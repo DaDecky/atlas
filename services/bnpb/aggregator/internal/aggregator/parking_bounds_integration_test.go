@@ -20,7 +20,7 @@ func TestIntegrationReplayReasonPreservesOrder(t *testing.T) {
 
 func TestOpsReplayReasonContract(t *testing.T) {
 	calls := 0
-	api := (&OpsAPI{Token: "internal-test-token", Replay: map[string]ReplaySource{
+	api := (&OpsAPI{Token: "internal-test-token", Capacity: defaultOpsCapacity, Replay: map[string]ReplaySource{
 		"PVMBG": func(_ context.Context, limit int, reason string) (int, error) {
 			calls++
 

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,28 +18,13 @@ type sourceGuard func(context.Context) error
 
 type sourceWork func(context.Context, int64, sourceGuard)
 
-func sourceElection(log *slog.Logger) (*lease.Elector, error) {
+func sourceElection(c aggregator.Config, log *slog.Logger) (*lease.Elector, error) {
 	raw, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 	if err != nil || strings.TrimSpace(string(raw)) == "" {
 		return nil, errors.New("source election requires a Kubernetes service account namespace")
 	}
 
-	timing := lease.Timing{Duration: 15 * time.Second, RenewDeadline: 10 * time.Second, RetryPeriod: 2 * time.Second}
-	for _, setting := range []struct {
-		name   string
-		target *time.Duration
-	}{
-		{"SOURCE_LEASE_DURATION", &timing.Duration},
-		{"SOURCE_LEASE_RENEW_DEADLINE", &timing.RenewDeadline},
-		{"SOURCE_LEASE_RETRY_PERIOD", &timing.RetryPeriod},
-	} {
-		if value := os.Getenv(setting.name); value != "" {
-			*setting.target, err = time.ParseDuration(value)
-			if err != nil || *setting.target <= 0 {
-				return nil, fmt.Errorf("invalid %s", setting.name)
-			}
-		}
-	}
+	timing := lease.Timing{Duration: c.SourceLeaseDuration, RenewDeadline: c.SourceLeaseRenewDeadline, RetryPeriod: c.SourceLeaseRetryPeriod}
 
 	return lease.NewInCluster(strings.TrimSpace(string(raw)), timing, log)
 }
@@ -242,7 +226,7 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 	streams := map[string]sourceWork{aggregator.SourceSatellite: sat, aggregator.SourceSensorPantai: sensorWork(c, store, log)}
 
 	if cluster, ok := store.(*aggregator.Cluster); ok {
-		election, err := sourceElection(log)
+		election, err := sourceElection(c, log)
 		if err != nil {
 			return nil, err
 		}

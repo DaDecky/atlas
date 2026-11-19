@@ -43,7 +43,7 @@ func (e *EpochIngest) Park(ctx context.Context, message ParkedMessage) error {
 
 // OpenClusterConfig reads mounted configuration containing node DSNs and API
 // connection details. Keep it in a Secret, never in a committed ConfigMap.
-func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
+func OpenClusterConfig(ctx context.Context, path string, limits ClusterLimits) (*Cluster, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -86,14 +86,14 @@ func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
 		return nil, err
 	}
 
-	c := &Cluster{Nodes: map[string]*DataNode{}, Deadline: shardDeadline, Placement: cached}
+	c := &Cluster{Nodes: map[string]*DataNode{}, Limits: limits, Placement: cached}
 	for _, entry := range config.Nodes {
 		if entry.Name == "" || c.Nodes[entry.Name] != nil {
 			c.Close()
 			return nil, errors.New("invalid data node names")
 		}
 
-		node, err := OpenDataNode(ctx, entry.Name, entry.URL)
+		node, err := OpenDataNode(ctx, entry.Name, entry.URL, limits)
 		if err != nil {
 			var schemaError *pgconn.PgError
 			if errors.As(err, &schemaError) {
@@ -101,7 +101,7 @@ func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
 				return nil, fmt.Errorf("data node %s initialization failed: %w", entry.Name, err)
 			}
 
-			node, err = offlineDataNode(entry.Name, entry.URL)
+			node, err = offlineDataNode(entry.Name, entry.URL, limits)
 			if err != nil {
 				c.Close()
 				return nil, err
@@ -275,13 +275,13 @@ func (c *Cluster) PlacementLease() (*placement.Lease, error) {
 	return &placement.Lease{Client: repo.Client, Origin: repo.Origin, Namespace: repo.Namespace, Name: repo.Name + "-recovery", Token: repo.Token, Holder: correlationID(), Duration: 15 * time.Second}, nil
 }
 
-func offlineDataNode(name, url string) (*DataNode, error) {
+func offlineDataNode(name, url string, limits ClusterLimits) (*DataNode, error) {
 	ingestConfig, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, err
 	}
 
-	ingestConfig.MaxConns = 4
+	ingestConfig.MaxConns = limits.IngestPool
 	ingestConfig.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	ingestConfig.ConnConfig.ConnectTimeout = 2 * time.Second
 
@@ -290,7 +290,7 @@ func offlineDataNode(name, url string) (*DataNode, error) {
 		return nil, err
 	}
 
-	queryConfig.MaxConns = 8
+	queryConfig.MaxConns = limits.QueryPool
 	queryConfig.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	queryConfig.ConnConfig.ConnectTimeout = 2 * time.Second
 

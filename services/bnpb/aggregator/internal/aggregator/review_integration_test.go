@@ -248,7 +248,7 @@ func lockDataTables(t *testing.T, node *DataNode, tables []string) {
 
 func TestDataIntegrationSlowCopyUsesHealthyPeer(t *testing.T) {
 	c := dataCluster(t)
-	c.Deadline = shardDeadline
+	c.Limits.ShardDeadline = defaultShardDeadline
 	ctx := context.Background()
 
 	h := contractEvent("BMKG", "slow-read", time.Now().UTC())
@@ -288,7 +288,7 @@ func TestDataIntegrationSlowCopyUsesHealthyPeer(t *testing.T) {
 
 func TestDataIntegrationCopyWritesShareDeadline(t *testing.T) {
 	c := dataCluster(t)
-	c.Deadline = 300 * time.Millisecond
+	c.Limits.ShardDeadline = 300 * time.Millisecond
 	ctx := context.Background()
 	h := contractEvent("BMKG", "parallel-write", time.Now().UTC())
 	shard := placement.Shard(h.HazardID)
@@ -359,7 +359,7 @@ func TestDataIntegrationRecoveryContinuesAfterRefillFailure(t *testing.T) {
 
 func TestDataIntegrationPlannerDatabaseCallDeadline(t *testing.T) {
 	c := dataCluster(t)
-	c.Deadline = 150 * time.Millisecond
+	c.Limits.ShardDeadline = 150 * time.Millisecond
 	lockDataTables(t, c.Nodes["b"], []string{"public.source_fence"})
 
 	started := time.Now()
@@ -513,7 +513,7 @@ func TestDataIntegrationRecoveryInitializesFreshStorePublicTables(t *testing.T) 
 
 func TestDataIntegrationHealthyAbsenceDoesNotWaitForSlowPeer(t *testing.T) {
 	c := dataCluster(t)
-	c.Deadline = shardDeadline
+	c.Limits.ShardDeadline = defaultShardDeadline
 	ctx := context.Background()
 	table, _, _ := c.Placement.Load(ctx)
 	shard := ""

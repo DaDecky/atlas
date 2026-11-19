@@ -19,15 +19,6 @@ type readResult[T any] struct {
 	err   error
 }
 
-const (
-	// Leave enough of the 2 s request budget for fallback and shard queueing.
-	shardDeadline = 400 * time.Millisecond
-	// Hedge a slow copy without doubling the normal read traffic.
-	readHedgeDelay = 150 * time.Millisecond
-	// Bound database pressure while allowing 48 shards to share the request budget.
-	shardReadWorkers = 8
-)
-
 // Each copy has its own deadline. A failed copy is fenced out of reads before
 // acknowledging a degraded write, including failures while parking a message.
 func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, source string, epoch int64, write func(context.Context, *Store) ([]HazardEvent, error)) ([]HazardEvent, error) {
@@ -173,7 +164,7 @@ func readCopies[T any](ctx context.Context, c *Cluster, copies []placement.Copy,
 	}
 	start()
 
-	timer := time.NewTimer(readHedgeDelay)
+	timer := time.NewTimer(c.Limits.HedgeDelay)
 	defer timer.Stop()
 
 	var last error

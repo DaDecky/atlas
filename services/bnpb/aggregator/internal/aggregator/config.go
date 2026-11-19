@@ -20,6 +20,10 @@ type Config struct {
 	BrokerHeartbeat                                                                          time.Duration
 	SensorURL, SensorToken                                                                   string
 	SensorInterval, SensorTimeout, SensorStaleAfter                                          time.Duration
+	ShardDeadline, ReadHedgeDelay, AuditTimeout                                              time.Duration
+	SourceLeaseDuration, SourceLeaseRenewDeadline, SourceLeaseRetryPeriod                    time.Duration
+	ShardReadWorkers, OpsCapacity                                                            int
+	DataIngestPool, DataQueryPool                                                            int32
 	HTTPMaxHeaderBytes, MaxSourceRecords, MaxSourceBytes                                     int
 }
 
@@ -55,6 +59,23 @@ const (
 	defaultSensorTimeout  = 2 * time.Second
 	// A newest reading 5 minutes behind generated_at is expired data.
 	defaultSensorStaleAfter = 5 * time.Minute
+	// Leave enough of the 2 s request budget for fallback and shard queueing.
+	defaultShardDeadline = 400 * time.Millisecond
+	// Hedge a slow copy without doubling the normal read traffic.
+	defaultReadHedgeDelay = 150 * time.Millisecond
+	// Bound database pressure while allowing 48 shards to share the request budget.
+	defaultShardReadWorkers = 8
+	// The checksum and the event export read every shard, so they get more than a request budget.
+	defaultAuditTimeout = 10 * time.Second
+	// Replay and parking listings are operator calls, so two at a time is enough.
+	defaultOpsCapacity = 2
+	// Each data node pool is shared by the 48 shard schemas of that node.
+	defaultDataIngestPool = 4
+	defaultDataQueryPool  = 8
+	// A lease outlives two missed renewals, so one slow API call does not end a term.
+	defaultSourceLeaseDuration      = 15 * time.Second
+	defaultSourceLeaseRenewDeadline = 10 * time.Second
+	defaultSourceLeaseRetryPeriod   = 2 * time.Second
 )
 
 func ConfigFromEnv() (Config, error) {
@@ -110,8 +131,9 @@ func ConfigFromEnv() (Config, error) {
 	}
 
 	var (
-		err                   error
-		ingestPool, queryPool int
+		err                           error
+		ingestPool, queryPool         int
+		dataIngestPool, dataQueryPool int
 	)
 
 	durations := []struct {
@@ -137,6 +159,12 @@ func ConfigFromEnv() (Config, error) {
 		{"SENSOR_POLL_INTERVAL", defaultSensorInterval, 100 * time.Millisecond, time.Minute, &c.SensorInterval},
 		{"SENSOR_TIMEOUT", defaultSensorTimeout, 100 * time.Millisecond, time.Minute, &c.SensorTimeout},
 		{"SENSOR_STALE_AFTER", defaultSensorStaleAfter, time.Second, 24 * time.Hour, &c.SensorStaleAfter},
+		{"SHARD_DEADLINE", defaultShardDeadline, 50 * time.Millisecond, 10 * time.Second, &c.ShardDeadline},
+		{"READ_HEDGE_DELAY", defaultReadHedgeDelay, 10 * time.Millisecond, 5 * time.Second, &c.ReadHedgeDelay},
+		{"AUDIT_TIMEOUT", defaultAuditTimeout, time.Second, 5 * time.Minute, &c.AuditTimeout},
+		{"SOURCE_LEASE_DURATION", defaultSourceLeaseDuration, time.Second, 5 * time.Minute, &c.SourceLeaseDuration},
+		{"SOURCE_LEASE_RENEW_DEADLINE", defaultSourceLeaseRenewDeadline, time.Second, 5 * time.Minute, &c.SourceLeaseRenewDeadline},
+		{"SOURCE_LEASE_RETRY_PERIOD", defaultSourceLeaseRetryPeriod, 100 * time.Millisecond, time.Minute, &c.SourceLeaseRetryPeriod},
 	}
 	for _, d := range durations {
 		if *d.dest, err = envDuration(d.key, d.fallback, d.min, d.max); err != nil {
@@ -157,6 +185,10 @@ func ConfigFromEnv() (Config, error) {
 		{"HTTP_MAX_HEADER_BYTES", defaultHTTPMaxHeaderBytes, 1 << 10, 1 << 20, &c.HTTPMaxHeaderBytes},
 		{"MAX_SOURCE_RECORDS", defaultMaxSourceRecords, 1, 100000, &c.MaxSourceRecords},
 		{"MAX_SOURCE_BYTES", defaultMaxSourceBytes, 64 << 10, defaultMaxSourceBytes, &c.MaxSourceBytes},
+		{"SHARD_READ_WORKERS", defaultShardReadWorkers, 1, 48, &c.ShardReadWorkers},
+		{"OPS_CAPACITY", defaultOpsCapacity, 1, 64, &c.OpsCapacity},
+		{"DATA_INGEST_POOL_SIZE", defaultDataIngestPool, 1, 64, &dataIngestPool},
+		{"DATA_QUERY_POOL_SIZE", defaultDataQueryPool, 1, 64, &dataQueryPool},
 	}
 	for _, d := range ints {
 		if *d.dest, err = envInt(d.key, d.fallback, d.min, d.max); err != nil {
@@ -165,6 +197,7 @@ func ConfigFromEnv() (Config, error) {
 	}
 
 	c.IngestPool, c.QueryPool = int32(ingestPool), int32(queryPool)
+	c.DataIngestPool, c.DataQueryPool = int32(dataIngestPool), int32(dataQueryPool)
 
 	return c, nil
 }
@@ -195,4 +228,20 @@ func envInt(key string, fallback, lowest, highest int) (int, error) {
 	}
 
 	return n, nil
+}
+
+// ClusterLimits are the per-copy limits of the replicated store.
+func (c Config) ClusterLimits() ClusterLimits {
+	return ClusterLimits{
+		ShardDeadline: c.ShardDeadline, HedgeDelay: c.ReadHedgeDelay, ReadWorkers: c.ShardReadWorkers,
+		IngestPool: c.DataIngestPool, QueryPool: c.DataQueryPool,
+	}
+}
+
+// DefaultClusterLimits are the limits of a tool that runs without the Aggregator environment.
+func DefaultClusterLimits() ClusterLimits {
+	return ClusterLimits{
+		ShardDeadline: defaultShardDeadline, HedgeDelay: defaultReadHedgeDelay, ReadWorkers: defaultShardReadWorkers,
+		IngestPool: defaultDataIngestPool, QueryPool: defaultDataQueryPool,
+	}
 }

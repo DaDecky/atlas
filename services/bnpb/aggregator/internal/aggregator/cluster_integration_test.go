@@ -58,7 +58,7 @@ func dataCluster(t *testing.T) *Cluster {
 			t.Skip("run make data-integration")
 		}
 
-		node, err := OpenDataNode(ctx, name, url)
+		node, err := OpenDataNode(ctx, name, url, DefaultClusterLimits())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +92,9 @@ func dataCluster(t *testing.T) *Cluster {
 	table, _ := placement.New([]string{"a", "b", "c"})
 	repo := &memoryPlacement{table: table}
 
-	c := &Cluster{Nodes: nodes, Placement: repo, Deadline: time.Second}
+	limits := DefaultClusterLimits()
+	limits.ShardDeadline = time.Second
+	c := &Cluster{Nodes: nodes, Placement: repo, Limits: limits}
 	for _, source := range []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"} {
 		if err := c.Seal(ctx, source, 1); err != nil {
 			t.Fatal(err)
@@ -421,7 +423,7 @@ func TestDataIntegrationNewNodeJoinsWithoutStoppingReads(t *testing.T) {
 		t.Skip("fourth local database required")
 	}
 
-	node, err := OpenDataNode(ctx, "d", url)
+	node, err := OpenDataNode(ctx, "d", url, DefaultClusterLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,10 +21,7 @@ func (c *Cluster) copyStore(holder placement.Copy, shard string) *Store {
 	s := *c.Nodes[holder.Node].Shards[shard]
 	s.storeID = holder.StoreID
 
-	s.deadline = c.Deadline
-	if s.deadline <= 0 {
-		s.deadline = shardDeadline
-	}
+	s.deadline = c.Limits.ShardDeadline
 
 	return &s
 }

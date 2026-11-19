@@ -114,7 +114,7 @@ func run() error {
 
 	ctx := context.Background()
 
-	store, err := aggregator.OpenClusterConfig(ctx, *config)
+	store, err := aggregator.OpenClusterConfig(ctx, *config, aggregator.DefaultClusterLimits())
 	if err != nil {
 		return err
 	}

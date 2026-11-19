@@ -164,6 +164,8 @@ services:
       SENSOR_POLL_INTERVAL: ${SENSOR_POLL_INTERVAL:-}
       SENSOR_TIMEOUT: ${SENSOR_TIMEOUT:-}
       SENSOR_STALE_AFTER: ${SENSOR_STALE_AFTER:-}
+      AUDIT_TIMEOUT: ${AUDIT_TIMEOUT:-}
+      OPS_CAPACITY: ${OPS_CAPACITY:-}
       <<: [*http, *db, *broker]
       SOURCE_SCHEMA_POLICY_FILE: /etc/atlas/schema/policy.json
     configs:

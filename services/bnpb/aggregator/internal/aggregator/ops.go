@@ -20,6 +20,7 @@ type OpsAPI struct {
 	Token    string
 	Replay   map[string]ReplaySource
 	Requests *ReplayRequests
+	Capacity int
 }
 
 var replayReasonCode = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -29,7 +30,7 @@ func (a *OpsAPI) Handler() http.Handler {
 	mux.HandleFunc("GET /internal/ops/unprocessed", a.unprocessed)
 	mux.HandleFunc("POST /internal/ops/replay", a.replay)
 
-	capacity := make(chan struct{}, 2)
+	capacity := make(chan struct{}, a.Capacity)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
