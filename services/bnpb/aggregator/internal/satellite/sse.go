@@ -101,23 +101,9 @@ func ReadSSE(ctx context.Context, reader io.Reader, emit func(SSEEvent) error) e
 func DecodeFeed(event SSEEvent) (Frame, error) {
 	frame := Frame{Offset: event.Offset, Type: event.Type, Raw: append(json.RawMessage(nil), event.Data...)}
 
-	var object map[string]json.RawMessage
-
-	err := decode.Array(io.MultiReader(strings.NewReader("["), bytes.NewReader(event.Data), strings.NewReader("]")), decode.Limits{BodyBytes: MaxFrameBytes + 2, Records: 1}, func(record decode.Record) error {
-		if record.Code != "" {
-			return errors.New("SSE JSON fails boundary validation")
-		}
-
-		object = record.Object
-
-		return nil
-	})
-	if err != nil || object == nil {
-		return frame, errors.New("invalid SSE JSON object")
-	}
-
-	if event.Type == "heartbeat" {
-		return frame, nil
+	object, err := decodeFeedObject(event.Data)
+	if err != nil || event.Type == "heartbeat" {
+		return frame, err
 	}
 
 	if raw, exists := object["offset"]; exists {
@@ -128,19 +114,7 @@ func DecodeFeed(event SSEEvent) (Frame, error) {
 	}
 
 	if changes, exists := object["changes"]; event.Type == "update" && exists {
-		key, err := decodeFeedKey(object["key"])
-		if err != nil || object["detection"] != nil {
-			return frame, errors.New("invalid partial update identity")
-		}
-
-		patch, err := decodeFeedPatch(changes)
-		if err != nil {
-			return frame, err
-		}
-
-		frame.Key, frame.Changes = key, &patch
-
-		return frame, nil
+		return decodeFeedUpdate(frame, object, changes)
 	}
 
 	if nested, exists := object["detection"]; exists {
@@ -154,21 +128,76 @@ func DecodeFeed(event SSEEvent) (Frame, error) {
 		return frame, err
 	}
 
+	d, err := decodeFeedDetection(object, event.Type == "retract")
+	if err != nil {
+		return frame, err
+	}
+
+	if event.Type == "retract" {
+		frame.Key = d.Key()
+	} else {
+		frame.Detection = &d
+	}
+
+	return frame, nil
+}
+
+// decodeFeedObject reads one JSON object through the boundary checks of the decoder.
+func decodeFeedObject(data []byte) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+
+	body := io.MultiReader(strings.NewReader("["), bytes.NewReader(data), strings.NewReader("]"))
+
+	err := decode.Array(body, decode.Limits{BodyBytes: MaxFrameBytes + 2, Records: 1}, func(record decode.Record) error {
+		if record.Code != "" {
+			return errors.New("SSE JSON fails boundary validation")
+		}
+
+		object = record.Object
+
+		return nil
+	})
+	if err != nil || object == nil {
+		return nil, errors.New("invalid SSE JSON object")
+	}
+
+	return object, nil
+}
+
+func decodeFeedUpdate(frame Frame, object map[string]json.RawMessage, changes json.RawMessage) (Frame, error) {
+	key, err := decodeFeedKey(object["key"])
+	if err != nil || object["detection"] != nil {
+		return frame, errors.New("invalid partial update identity")
+	}
+
+	patch, err := decodeFeedPatch(changes)
+	if err != nil {
+		return frame, err
+	}
+
+	frame.Key, frame.Changes = key, &patch
+
+	return frame, nil
+}
+
+// decodeFeedDetection checks the required fields and builds a detection. A retraction
+// identifies a record only, so it needs no measurements.
+func decodeFeedDetection(object map[string]json.RawMessage, retract bool) (Detection, error) {
 	required := []string{"satellite", "acq_date", "acq_time", "latitude", "longitude"}
-	if event.Type != "retract" {
+	if !retract {
 		required = append(required, "confidence", "frp")
 	}
 
 	for _, key := range required {
 		if raw, exists := object[key]; !exists || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-			return frame, errors.New("missing detection field")
+			return Detection{}, errors.New("missing detection field")
 		}
 	}
 
 	if raw := object["acq_time"]; len(raw) > 0 && raw[0] != '"' {
 		var n int
 		if json.Unmarshal(raw, &n) != nil || n < 0 || n > 2359 {
-			return frame, errors.New("invalid numeric HHMM")
+			return Detection{}, errors.New("invalid numeric HHMM")
 		}
 
 		object["acq_time"], _ = json.Marshal(fmt.Sprintf("%04d", n))
@@ -178,24 +207,19 @@ func DecodeFeed(event SSEEvent) (Frame, error) {
 
 	var d Detection
 	if json.Unmarshal(raw, &d) != nil {
-		return frame, errors.New("invalid detection types")
+		return Detection{}, errors.New("invalid detection types")
 	}
 
 	d.Confidence = normalizeConfidence(d.Confidence)
-
-	if event.Type == "retract" {
-		// Retract identity records need no measurements.
+	if retract {
 		d.Confidence, d.FRP = "nominal", 0
-		frame.Key = d.Key()
-	} else {
-		frame.Detection = &d
 	}
 
 	if d.Validate() != nil {
-		return frame, errors.New("invalid detection values")
+		return Detection{}, errors.New("invalid detection values")
 	}
 
-	return frame, nil
+	return d, nil
 }
 
 func normalizeConfidence(value string) string {

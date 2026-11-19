@@ -174,50 +174,18 @@ func (e *Engine) Apply(frame Frame) ([]Fire, error) {
 		return nil, errors.New("stream offset gap")
 	}
 
-	key := frame.Key
-	if frame.Type == "update" && frame.Changes != nil {
-		previous, exists := e.state.Records[key]
-		if !exists || frame.Detection != nil {
-			return nil, errors.New("partial update requires a stored detection")
-		}
-
-		detection := previous.Detection
-		if frame.Changes.Confidence != nil {
-			detection.Confidence = *frame.Changes.Confidence
-		}
-
-		if frame.Changes.FRP != nil {
-			detection.FRP = *frame.Changes.FRP
-		}
-
-		frame.Detection = &detection
+	frame, err := e.completeUpdate(frame)
+	if err != nil {
+		return nil, err
 	}
 
-	switch frame.Type {
-	case "detection", "update":
-		if frame.Detection == nil || frame.Detection.Validate() != nil {
-			return nil, errors.New("invalid detection frame")
-		}
-
-		computed := frame.Detection.Key()
-		if key != "" && key != computed {
-			return nil, errors.New("detection identity changed")
-		}
-
-		key = computed
-	case "retract":
-		if key == "" || len(key) > 512 {
-			return nil, errors.New("retraction requires detection key")
-		}
-	case "heartbeat":
-		e.state.Offset, e.state.HasOffset = frame.Offset, true
-		return nil, nil
-	default:
-		return nil, errors.New("unknown stream event")
+	key, err := frameKey(frame)
+	if err != nil {
+		return nil, err
 	}
 
 	old, exists := e.state.Records[key]
-	if frame.Type == "detection" && (exists || e.state.Tombstones[key]) {
+	if frame.Type == "heartbeat" || frame.Type == "detection" && (exists || e.state.Tombstones[key]) {
 		e.state.Offset, e.state.HasOffset = frame.Offset, true
 		return nil, nil
 	}
@@ -236,31 +204,89 @@ func (e *Engine) Apply(frame Frame) ([]Fire, error) {
 			e.state.Records[key] = old
 		}
 	} else {
-		d := *frame.Detection
-		when, _ := d.Time()
-
-		late := exists && old.Late || !exists && !e.state.Watermark.IsZero() && when.Before(e.state.Watermark.Add(-AllowedLate))
-		if when.After(e.state.Watermark) {
-			e.state.Watermark = when
-		}
-
-		e.state.Records[key] = Record{Detection: d, Late: late}
-		delete(e.state.Tombstones, key)
-
-		if late {
-			frame.Detection = &d
-			frame.Raw = append(json.RawMessage(nil), frame.Raw...)
-			e.state.Late = append(e.state.Late, LateRecord{Frame: frame, SeenAt: e.state.Watermark})
-		} else if d.Confidence != "low" {
-			e.add(key)
-			e.component(key, affected)
-		}
+		e.record(frame, key, old, exists, affected)
 	}
 
 	changes := e.reconcile(affected, frame.Offset)
 	e.state.Offset, e.state.HasOffset = frame.Offset, true
 
 	return changes, nil
+}
+
+// completeUpdate fills a partial update from the stored detection it changes.
+func (e *Engine) completeUpdate(frame Frame) (Frame, error) {
+	if frame.Type != "update" || frame.Changes == nil {
+		return frame, nil
+	}
+
+	previous, exists := e.state.Records[frame.Key]
+	if !exists || frame.Detection != nil {
+		return frame, errors.New("partial update requires a stored detection")
+	}
+
+	detection := previous.Detection
+	if frame.Changes.Confidence != nil {
+		detection.Confidence = *frame.Changes.Confidence
+	}
+
+	if frame.Changes.FRP != nil {
+		detection.FRP = *frame.Changes.FRP
+	}
+
+	frame.Detection = &detection
+
+	return frame, nil
+}
+
+// frameKey validates a frame and returns the detection key it concerns. A heartbeat has none.
+func frameKey(frame Frame) (string, error) {
+	switch frame.Type {
+	case "detection", "update":
+		if frame.Detection == nil || frame.Detection.Validate() != nil {
+			return "", errors.New("invalid detection frame")
+		}
+
+		computed := frame.Detection.Key()
+		if frame.Key != "" && frame.Key != computed {
+			return "", errors.New("detection identity changed")
+		}
+
+		return computed, nil
+	case "retract":
+		if frame.Key == "" || len(frame.Key) > 512 {
+			return "", errors.New("retraction requires detection key")
+		}
+
+		return frame.Key, nil
+	case "heartbeat":
+		return "", nil
+	}
+
+	return "", errors.New("unknown stream event")
+}
+
+// record stores a detection. A detection older than the watermark minus AllowedLate is kept
+// as late and joins no fire, and a low-confidence detection joins no fire either.
+func (e *Engine) record(frame Frame, key string, old Record, exists bool, affected map[string]bool) {
+	d := *frame.Detection
+	when, _ := d.Time()
+
+	late := exists && old.Late || !exists && !e.state.Watermark.IsZero() && when.Before(e.state.Watermark.Add(-AllowedLate))
+	if when.After(e.state.Watermark) {
+		e.state.Watermark = when
+	}
+
+	e.state.Records[key] = Record{Detection: d, Late: late}
+	delete(e.state.Tombstones, key)
+
+	if late {
+		frame.Detection = &d
+		frame.Raw = append(json.RawMessage(nil), frame.Raw...)
+		e.state.Late = append(e.state.Late, LateRecord{Frame: frame, SeenAt: e.state.Watermark})
+	} else if d.Confidence != "low" {
+		e.add(key)
+		e.component(key, affected)
+	}
 }
 
 func (e *Engine) earlier(a, b string) bool {
@@ -275,6 +301,42 @@ func (e *Engine) earlier(a, b string) bool {
 }
 
 func (e *Engine) reconcile(affected map[string]bool, offset int64) []Fire {
+	old := e.previousFires(affected)
+	components := e.components(affected)
+	preferred := e.preferredComponents(components, old)
+
+	assigned := map[string]bool{}
+	winners := map[int]string{}
+	changes := map[string]Fire{}
+
+	for i, keys := range components {
+		fire := e.summarize(e.chooseFire(i, keys, preferred, old, offset), keys)
+
+		assigned[fire.ID], winners[i] = true, fire.ID
+		if previous, exists := e.state.Fires[fire.ID]; !exists || !equalFire(previous, fire) {
+			changes[fire.ID] = fire
+		}
+
+		e.state.Fires[fire.ID] = fire
+		for _, key := range keys {
+			e.state.Owners[key] = fire.ID
+		}
+	}
+
+	e.retireFires(old, assigned, preferred, winners, changes)
+
+	out := make([]Fire, 0, len(changes))
+	for _, fire := range changes {
+		out = append(out, fire)
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+
+	return out
+}
+
+// previousFires returns the live fires that own an affected key.
+func (e *Engine) previousFires(affected map[string]bool) map[string]Fire {
 	old := map[string]Fire{}
 
 	for key := range affected {
@@ -293,9 +355,14 @@ func (e *Engine) reconcile(affected map[string]bool, offset int64) []Fire {
 		old[id] = fire
 	}
 
-	components := [][]string{}
+	return old
+}
 
+// components returns the groups of two or more connected keys, each sorted by detection time.
+func (e *Engine) components(affected map[string]bool) [][]string {
+	components := [][]string{}
 	visited := map[string]bool{}
+
 	for key := range affected {
 		if visited[key] {
 			continue
@@ -318,6 +385,12 @@ func (e *Engine) reconcile(affected map[string]bool, offset int64) []Fire {
 
 	sort.Slice(components, func(i, j int) bool { return e.earlier(components[i][0], components[j][0]) })
 
+	return components
+}
+
+// preferredComponents gives each old fire the largest component it still holds keys in,
+// and the earliest one on a tie.
+func (e *Engine) preferredComponents(components [][]string, old map[string]Fire) map[string]int {
 	preferred := map[string]int{}
 
 	for i, keys := range components {
@@ -334,57 +407,48 @@ func (e *Engine) reconcile(affected map[string]bool, offset int64) []Fire {
 		}
 	}
 
-	assigned := map[string]bool{}
-	winners := map[int]string{}
-	changes := map[string]Fire{}
+	return preferred
+}
 
-	for i, keys := range components {
-		candidates := []Fire{}
+// chooseFire keeps the identity of the largest old fire that prefers this component, and
+// mints a new identity when none does.
+func (e *Engine) chooseFire(i int, keys []string, preferred map[string]int, old map[string]Fire, offset int64) Fire {
+	candidates := []Fire{}
 
-		for id, index := range preferred {
-			if index == i {
-				candidates = append(candidates, old[id])
-			}
-		}
-
-		sort.Slice(candidates, func(i, j int) bool {
-			a, b := candidates[i], candidates[j]
-			if a.Count != b.Count {
-				return a.Count > b.Count
-			}
-
-			if a.MintOffset != b.MintOffset {
-				return a.MintOffset < b.MintOffset
-			}
-
-			return a.ID < b.ID
-		})
-
-		var fire Fire
-		if len(candidates) > 0 {
-			fire = candidates[0]
-		} else {
-			id := identity(keys[0])
-			if _, exists := e.state.Fires[id]; exists {
-				id += "-" + strconv.FormatInt(offset, 16)
-			}
-
-			fire = Fire{ID: id, MintOffset: offset}
-		}
-
-		fire = e.summarize(fire, keys)
-
-		assigned[fire.ID], winners[i] = true, fire.ID
-		if previous, exists := e.state.Fires[fire.ID]; !exists || !equalFire(previous, fire) {
-			changes[fire.ID] = fire
-		}
-
-		e.state.Fires[fire.ID] = fire
-		for _, key := range keys {
-			e.state.Owners[key] = fire.ID
+	for id, index := range preferred {
+		if index == i {
+			candidates = append(candidates, old[id])
 		}
 	}
 
+	sort.Slice(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if a.Count != b.Count {
+			return a.Count > b.Count
+		}
+
+		if a.MintOffset != b.MintOffset {
+			return a.MintOffset < b.MintOffset
+		}
+
+		return a.ID < b.ID
+	})
+
+	if len(candidates) > 0 {
+		return candidates[0]
+	}
+
+	id := identity(keys[0])
+	if _, exists := e.state.Fires[id]; exists {
+		id += "-" + strconv.FormatInt(offset, 16)
+	}
+
+	return Fire{ID: id, MintOffset: offset}
+}
+
+// retireFires marks each old fire that kept no component as merged into the fire of its
+// preferred component, or as withdrawn when it has none.
+func (e *Engine) retireFires(old map[string]Fire, assigned map[string]bool, preferred map[string]int, winners map[int]string, changes map[string]Fire) {
 	for id, fire := range old {
 		if assigned[id] {
 			continue
@@ -404,15 +468,6 @@ func (e *Engine) reconcile(affected map[string]bool, offset int64) []Fire {
 
 		e.state.Fires[id] = fire
 	}
-
-	out := make([]Fire, 0, len(changes))
-	for _, fire := range changes {
-		out = append(out, fire)
-	}
-
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-
-	return out
 }
 
 func contains(keys []string, wanted string) bool {
