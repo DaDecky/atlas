@@ -13,8 +13,9 @@ import (
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
 
-// Parking uses reserved metadata shards so it has the same two-copy placement
-// and refill lifecycle as source state. Recovery marks follow idempotent writes.
+// Parking uses the shard of its metadata key, one of the 48 data shards, so it has the
+// same two-copy placement and refill lifecycle as source state.
+// Recovery marks follow idempotent writes.
 func (c *Cluster) Park(ctx context.Context, m ParkedMessage) error {
 	return c.park(ctx, m, 0)
 }
