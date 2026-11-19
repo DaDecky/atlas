@@ -23,6 +23,9 @@ type alert struct {
 	IngestedAt time.Time `json:"ingested_at"`
 }
 
+// queueArgs is empty, so no broker limit ever drops a critical alert.
+var queueArgs amqp.Table
+
 func (h *Health) Ready() bool { return h.ready.Load() }
 
 func (h *Health) Handler() http.Handler {
@@ -164,8 +167,7 @@ func declareAndConsume(conn *amqp.Connection, cfg Config) (<-chan amqp.Delivery,
 		return nil, err
 	}
 
-	// No TTL and no length limit, so a critical alert is never expired or dropped by the broker.
-	if _, err = ch.QueueDeclare(queue, true, false, false, false, nil); err != nil {
+	if _, err = ch.QueueDeclare(queue, true, false, false, false, queueArgs); err != nil {
 		return nil, err
 	}
 

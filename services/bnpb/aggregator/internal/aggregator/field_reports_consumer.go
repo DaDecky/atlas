@@ -18,8 +18,11 @@ type FieldReportsConsumer struct {
 
 const FieldReportsQueue = "field.reports"
 
+// fieldReportsArgs must match the Client API's declaration, or RabbitMQ refuses the second one.
+var fieldReportsArgs = amqp.Table{"x-max-length": int32(10000), "x-max-length-bytes": int32(64 << 20), "x-overflow": "reject-publish"}
+
 func DeclareFieldReports(ch *amqp.Channel) error {
-	_, err := ch.QueueDeclare(FieldReportsQueue, true, false, false, false, amqp.Table{"x-max-length": int32(10000), "x-max-length-bytes": int32(64 << 20), "x-overflow": "reject-publish"})
+	_, err := ch.QueueDeclare(FieldReportsQueue, true, false, false, false, fieldReportsArgs)
 	return err
 }
 

@@ -31,6 +31,11 @@ type EventPublisher interface {
 
 const Exchange = "hazard.events"
 
+const fieldAlertsQueue = "field.alerts"
+
+// fieldAlertsArgs is empty, so no broker limit ever drops a critical alert. The notifier declares the same.
+var fieldAlertsArgs amqp.Table
+
 func (p *RabbitPublisher) Close() {
 	if p.socket != nil {
 		_ = p.socket.Close()
@@ -81,7 +86,7 @@ func (p *RabbitPublisher) Publish(ctx context.Context, item Publication) error {
 }
 
 func (p *RabbitPublisher) PublishCritical(ctx context.Context, item Publication) error {
-	return p.publish(ctx, item, "", "field.alerts")
+	return p.publish(ctx, item, "", fieldAlertsQueue)
 }
 
 func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchange, key string) (err error) {
@@ -127,8 +132,8 @@ func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchang
 		Body:          raw,
 	}
 
-	if key == "field.alerts" {
-		if _, err = p.channel.QueueDeclare("field.alerts", true, false, false, false, nil); err != nil {
+	if key == fieldAlertsQueue {
+		if _, err = p.channel.QueueDeclare(fieldAlertsQueue, true, false, false, false, fieldAlertsArgs); err != nil {
 			p.Close()
 			return err
 		}

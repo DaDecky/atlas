@@ -22,6 +22,8 @@ type AccessClaims struct {
 	TokenID      string `json:"jti"`
 }
 
+var knownScopes = map[string]bool{"hazards:summary": true, "hazards:raw": true, "reports:write": true, "ops:read": true}
+
 func hasScope(scopes, wanted string) bool {
 	for _, scope := range strings.Fields(scopes) {
 		if scope == wanted {
@@ -35,7 +37,7 @@ func hasScope(scopes, wanted string) bool {
 func validScopes(scopes string) bool {
 	seen := map[string]bool{}
 	for _, scope := range strings.Fields(scopes) {
-		if seen[scope] || scope != "hazards:summary" && scope != "hazards:raw" && scope != "reports:write" && scope != "ops:read" {
+		if seen[scope] || !knownScopes[scope] {
 			return false
 		}
 

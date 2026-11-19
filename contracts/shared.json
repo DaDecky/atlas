@@ -1,0 +1,9 @@
+{
+  "queues": {
+    "field.reports": {"durable": true, "arguments": {"x-max-length": 10000, "x-max-length-bytes": 67108864, "x-overflow": "reject-publish"}},
+    "field.alerts": {"durable": true, "arguments": {}}
+  },
+  "scopes": ["hazards:summary", "hazards:raw", "reports:write", "ops:read"],
+  "sources": {"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"},
+  "access_token_claims": ["iss", "aud", "sub", "client_id", "scope", "session_id", "token_version", "iat", "exp", "jti"]
+}
