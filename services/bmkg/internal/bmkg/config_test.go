@@ -10,7 +10,34 @@ func validTestEnv(t *testing.T) {
 	t.Setenv("BMKG_API_KEY", "test-bmkg")
 	t.Setenv("DATABASE_URL", "postgres://bmkg:test@localhost/bmkg")
 
-	for _, key := range []string{"HTTP_ADDR", "RESPONSE_DELAY", "EVENT_INTERVAL"} {
+	for _, key := range []string{
+		"HTTP_ADDR", "RESPONSE_DELAY", "EVENT_INTERVAL", "RESPONSE_DELAY_FLOOR", "RESPONSE_DELAY_CEILING",
+		"EVENT_INTERVAL_CEILING", "MIN_SEED_RECORDS", "SEED", "DB_POOL_SIZE", "STORE_TIMEOUT", "HTTP_READ_TIMEOUT",
+	} {
+		t.Setenv(key, "")
+	}
+}
+
+func TestConfigLimitsOverrideAndBounds(t *testing.T) {
+	validTestEnv(t)
+
+	t.Setenv("MIN_SEED_RECORDS", "5")
+	t.Setenv("RESPONSE_DELAY_CEILING", "500ms")
+	t.Setenv("RESPONSE_DELAY", "300ms")
+	t.Setenv("SEED", "7")
+
+	c, err := ConfigFromEnv()
+	if err != nil || c.MinSeedRecords != 5 || c.Delay != 300*time.Millisecond || c.Seed != 7 {
+		t.Fatal(c, err)
+	}
+
+	for key, value := range map[string]string{"MIN_SEED_RECORDS": "0", "DB_POOL_SIZE": "100", "SEED": "x"} {
+		t.Setenv(key, value)
+
+		if _, err = ConfigFromEnv(); err == nil {
+			t.Fatal(key, "accepted")
+		}
+
 		t.Setenv(key, "")
 	}
 }

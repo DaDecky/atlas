@@ -19,12 +19,24 @@ type Config struct {
 	PublicKey                                                       ed25519.PublicKey
 	OutboundTimeout                                                 time.Duration
 	RequestCapacity                                                 int
+
+	HTTPReadHeaderTimeout, HTTPReadTimeout, HTTPIdleTimeout, ShutdownTimeout, MaxRetryAfter time.Duration
+	HTTPMaxHeaderBytes, MaxResponseBytes, MaxValidateBytes                                  int
 }
 
 const (
 	defaultAddress         = ":8080"
 	defaultOutboundTimeout = 3 * time.Second
 	defaultRequestCapacity = 128
+
+	defaultHTTPReadHeaderTimeout = 3 * time.Second
+	defaultHTTPReadTimeout       = 5 * time.Second
+	defaultHTTPIdleTimeout       = 30 * time.Second
+	defaultHTTPMaxHeaderBytes    = 16 << 10
+	defaultShutdownTimeout       = 5 * time.Second
+	defaultMaxRetryAfter         = time.Hour
+	defaultMaxResponseBytes      = 4 << 20
+	defaultMaxValidateBytes      = 4096
 )
 
 func decodeBase64(raw string) ([]byte, error) {
@@ -120,5 +132,65 @@ func ConfigFromEnv() (Config, error) {
 		}
 	}
 
+	durations := []struct {
+		key                string
+		fallback, min, max time.Duration
+		dest               *time.Duration
+	}{
+		{"HTTP_READ_HEADER_TIMEOUT", defaultHTTPReadHeaderTimeout, 100 * time.Millisecond, time.Minute, &c.HTTPReadHeaderTimeout},
+		{"HTTP_READ_TIMEOUT", defaultHTTPReadTimeout, 100 * time.Millisecond, 5 * time.Minute, &c.HTTPReadTimeout},
+		{"HTTP_IDLE_TIMEOUT", defaultHTTPIdleTimeout, time.Second, 10 * time.Minute, &c.HTTPIdleTimeout},
+		{"SHUTDOWN_TIMEOUT", defaultShutdownTimeout, time.Second, 2 * time.Minute, &c.ShutdownTimeout},
+		{"MAX_RETRY_AFTER", defaultMaxRetryAfter, time.Second, 24 * time.Hour, &c.MaxRetryAfter},
+	}
+	for _, d := range durations {
+		if *d.dest, err = durationEnv(d.key, d.fallback, d.min, d.max); err != nil {
+			return c, err
+		}
+	}
+
+	ints := []struct {
+		key                string
+		fallback, min, max int
+		dest               *int
+	}{
+		{"HTTP_MAX_HEADER_BYTES", defaultHTTPMaxHeaderBytes, 1 << 10, 1 << 20, &c.HTTPMaxHeaderBytes},
+		{"AGGREGATOR_MAX_RESPONSE_BYTES", defaultMaxResponseBytes, 64 << 10, 64 << 20, &c.MaxResponseBytes},
+		{"AUTH_VALIDATE_MAX_BYTES", defaultMaxValidateBytes, 512, 1 << 20, &c.MaxValidateBytes},
+	}
+	for _, d := range ints {
+		if *d.dest, err = intEnv(d.key, d.fallback, d.min, d.max); err != nil {
+			return c, err
+		}
+	}
+
 	return c, nil
+}
+
+func durationEnv(name string, fallback, min, max time.Duration) (time.Duration, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < min || d > max {
+		return 0, errors.New("invalid " + name)
+	}
+
+	return d, nil
+}
+
+func intEnv(name string, fallback, min, max int) (int, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < min || n > max {
+		return 0, errors.New("invalid " + name)
+	}
+
+	return n, nil
 }

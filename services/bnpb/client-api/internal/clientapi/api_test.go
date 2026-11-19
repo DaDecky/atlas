@@ -58,15 +58,18 @@ func testAPI(
 
 	a := &API{
 		Config: Config{
-			AuthURL:         "http://auth:8084",
-			AggregatorURL:   "http://aggregator:8083",
-			AggregatorToken: "agg-secret",
-			ValidateToken:   "validate-secret",
-			Issuer:          "atlas-auth",
-			Audience:        "atlas-client-api",
-			PublicKey:       public,
-			OutboundTimeout: time.Second,
-			RequestCapacity: defaultRequestCapacity,
+			AuthURL:          "http://auth:8084",
+			AggregatorURL:    "http://aggregator:8083",
+			AggregatorToken:  "agg-secret",
+			ValidateToken:    "validate-secret",
+			Issuer:           "atlas-auth",
+			Audience:         "atlas-client-api",
+			PublicKey:        public,
+			OutboundTimeout:  time.Second,
+			RequestCapacity:  defaultRequestCapacity,
+			MaxRetryAfter:    defaultMaxRetryAfter,
+			MaxResponseBytes: defaultMaxResponseBytes,
+			MaxValidateBytes: defaultMaxValidateBytes,
 		},
 		Log: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}

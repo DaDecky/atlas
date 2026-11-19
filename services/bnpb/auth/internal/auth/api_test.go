@@ -119,6 +119,8 @@ func testAPI(t *testing.T, store SessionStore) *API {
 		Audience:      "atlas-client-api",
 		AccessTTL:     time.Minute,
 		RefreshTTL:    time.Hour,
+		StoreTimeout:  defaultStoreTimeout,
+		MaxBodyBytes:  defaultMaxBodyBytes,
 		Log:           slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 }

@@ -39,6 +39,7 @@ set -a; source .env; set +a
 | `BMKG_API_KEY` | BMKG, Aggregator | BMKG key sent in `X-BMKG-Key`. | secret |
 | `PVMBG_TOKEN` | PVMBG, Aggregator | PVMBG bearer token shaped `pvmbg.<key-id>.<secret>`, with a secret of at least 16 URL-safe characters. | secret |
 | `AGGREGATOR_INTERNAL_TOKEN` | Aggregator, Client API | Credential for the Aggregator's internal read API. | secret |
+| `AUDIT_TOKEN` | Aggregator | Credential for the Audit API. The assistants give the real one for the exam, and `make env` generates a local one. | secret |
 | `AUTH_VALIDATE_TOKEN` | Auth, Client API | Credential for `POST /auth/validate`. | secret |
 | `AUTH_ED25519_PRIVATE_KEY_B64` | Auth | Base64 PKCS#8 PEM key that signs access tokens. | secret |
 | `AUTH_ED25519_PUBLIC_KEY_B64` | Client API | Base64 public key PEM that verifies access tokens. | secret |
@@ -56,7 +57,7 @@ set -a; source .env; set +a
 | `POLL_INTERVAL` | Aggregator | Time between polls of each source. | `3s` |
 | `ACCESS_TOKEN_TTL` | Auth | Access token lifetime. | `60s` |
 
-Other settings are fixed defaults in each service's `config.go`. The BMKG delay is 100ms, and refresh tokens last 7 days.
+Other limits are optional environment variables. Each service's `config.go` holds the name, the default, and the range of each, and Compose passes the value from `.env` when it is set.
 
 ## Source mocks
 

@@ -35,7 +35,43 @@ func validTestEnv(t *testing.T) {
 		"PUBLISH_CAPACITY",
 		"QUERY_POOL_SIZE",
 		"INGEST_POOL_SIZE",
+		"HTTP_READ_HEADER_TIMEOUT",
+		"HTTP_READ_TIMEOUT",
+		"HTTP_IDLE_TIMEOUT",
+		"HTTP_MAX_HEADER_BYTES",
+		"STARTUP_TIMEOUT",
+		"SHUTDOWN_TIMEOUT",
+		"DB_CONNECT_TIMEOUT",
+		"SOURCE_IDLE_CONN_TIMEOUT",
+		"FAILURE_MARK_TIMEOUT",
+		"WARNING_LOOKBACK",
+		"BROKER_HEARTBEAT",
+		"MAX_SOURCE_RECORDS",
+		"MAX_SOURCE_BYTES",
 	} {
+		t.Setenv(key, "")
+	}
+}
+
+func TestConfigLimitsOverrideAndBounds(t *testing.T) {
+	validTestEnv(t)
+
+	t.Setenv("MAX_SOURCE_BYTES", "131072")
+	t.Setenv("WARNING_LOOKBACK", "2h")
+	t.Setenv("HTTP_READ_TIMEOUT", "7s")
+
+	c, err := ConfigFromEnv()
+	if err != nil || c.MaxSourceBytes != 131072 || c.WarningLookback != 2*time.Hour || c.HTTPReadTimeout != 7*time.Second {
+		t.Fatal(c, err)
+	}
+
+	for key, value := range map[string]string{"MAX_SOURCE_BYTES": "10", "WARNING_LOOKBACK": "48h", "STARTUP_TIMEOUT": "0s"} {
+		t.Setenv(key, value)
+
+		if _, err = ConfigFromEnv(); err == nil {
+			t.Fatal(key, "accepted")
+		}
+
 		t.Setenv(key, "")
 	}
 }

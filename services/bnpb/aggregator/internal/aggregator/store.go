@@ -21,14 +21,14 @@ const columns = `hazard_id, source, source_ref_id, hazard_type, severity, area_n
 //go:embed schema.sql
 var schema string
 
-func openPool(ctx context.Context, url string, size int32) (*pgxpool.Pool, error) {
+func openPool(ctx context.Context, url string, size int32, connectTimeout time.Duration) (*pgxpool.Pool, error) {
 	c, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, errors.New("invalid database configuration")
 	}
 
 	c.MaxConns = size
-	c.ConnConfig.ConnectTimeout = 2 * time.Second
+	c.ConnConfig.ConnectTimeout = connectTimeout
 
 	p, err := pgxpool.NewWithConfig(ctx, c)
 	if err != nil {
@@ -43,13 +43,13 @@ func openPool(ctx context.Context, url string, size int32) (*pgxpool.Pool, error
 	return p, nil
 }
 
-func OpenStore(ctx context.Context, url string, ingestSize, querySize int32) (*Store, error) {
-	i, err := openPool(ctx, url, ingestSize)
+func OpenStore(ctx context.Context, url string, ingestSize, querySize int32, connectTimeout time.Duration) (*Store, error) {
+	i, err := openPool(ctx, url, ingestSize, connectTimeout)
 	if err != nil {
 		return nil, err
 	}
 
-	q, err := openPool(ctx, url, querySize)
+	q, err := openPool(ctx, url, querySize, connectTimeout)
 	if err != nil {
 		i.Close()
 		return nil, err

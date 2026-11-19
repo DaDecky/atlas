@@ -28,14 +28,14 @@ var schema string
 //go:embed seed/*.json
 var seed embed.FS
 
-func OpenStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
+func OpenStore(ctx context.Context, databaseURL string, poolSize int32, connectTimeout time.Duration) (*PostgresStore, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, errors.New("invalid BMKG database URL")
 	}
 
-	cfg.MaxConns = 8
-	cfg.ConnConfig.ConnectTimeout = 2 * time.Second
+	cfg.MaxConns = poolSize
+	cfg.ConnConfig.ConnectTimeout = connectTimeout
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -158,7 +158,7 @@ func (s *PostgresStore) Warnings(ctx context.Context, since *time.Time) ([]Tsuna
 	return out, rows.Err()
 }
 
-func seedRecords() ([]SeismicEvent, map[string][]TsunamiWarning, error) {
+func seedRecords(minRecords int) ([]SeismicEvent, map[string][]TsunamiWarning, error) {
 	var (
 		events   []SeismicEvent
 		warnings []TsunamiWarning
@@ -179,8 +179,8 @@ func seedRecords() ([]SeismicEvent, map[string][]TsunamiWarning, error) {
 		}
 	}
 
-	if len(events) < MinSeedRecords {
-		return nil, nil, fmt.Errorf("seed has %d seismic events, need at least %d", len(events), MinSeedRecords)
+	if len(events) < minRecords {
+		return nil, nil, fmt.Errorf("seed has %d seismic events, need at least %d", len(events), minRecords)
 	}
 
 	byEvent := map[string][]TsunamiWarning{}
@@ -191,9 +191,9 @@ func seedRecords() ([]SeismicEvent, map[string][]TsunamiWarning, error) {
 	return events, byEvent, nil
 }
 
-// LoadSeed stores the embedded seed records, so every start serves at least MinSeedRecords historical events.
-func LoadSeed(ctx context.Context, store Store) error {
-	events, warnings, err := seedRecords()
+// LoadSeed stores the embedded seed records, so every start serves at least minRecords historical events.
+func LoadSeed(ctx context.Context, store Store, minRecords int) error {
+	events, warnings, err := seedRecords(minRecords)
 	if err != nil {
 		return err
 	}

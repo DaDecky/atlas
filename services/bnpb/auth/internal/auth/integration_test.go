@@ -19,7 +19,7 @@ func TestIntegrationSessionSurvivesAuthStoreRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	store, err := OpenStore(ctx, url)
+	store, err := OpenStore(ctx, url, defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestIntegrationSessionSurvivesAuthStoreRestart(t *testing.T) {
 
 	store.Close()
 
-	store, err = OpenStore(ctx, url)
+	store, err = OpenStore(ctx, url, defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestIntegrationSessionSurvivesAuthStoreRestart(t *testing.T) {
 
 	store.Close()
 
-	store, err = OpenStore(ctx, url)
+	store, err = OpenStore(ctx, url, defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestIntegrationConcurrentRefreshRevocationAndExpiry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	s, err := OpenStore(ctx, url)
+	s, err := OpenStore(ctx, url, defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

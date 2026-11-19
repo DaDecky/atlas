@@ -40,7 +40,7 @@ func TestIntegrationSavePublishProcessCrash(t *testing.T) {
 	defer cancel()
 
 	if os.Getenv("ATLAS_CRASH_CHILD") == "1" {
-		s, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4)
+		s, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4, defaultDBConnectTimeout)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,7 +129,7 @@ func TestIntegrationSavePublishProcessCrash(t *testing.T) {
 		t.Fatalf("expected process exit 77: %v %s", err, output)
 	}
 	// Open fresh process state and verify the committed row and checkpoint survived.
-	restarted, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4)
+	restarted, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
