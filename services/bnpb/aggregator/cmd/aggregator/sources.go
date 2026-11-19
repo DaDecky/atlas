@@ -51,10 +51,11 @@ func waitSourceRetry(ctx context.Context) bool {
 }
 
 func sourcePoller(c aggregator.Config, source string, writer *aggregator.EpochIngest, guard leadership.Guard, log *slog.Logger) (*aggregator.Poller, func()) {
-	base, key := c.BMKGURL, c.BMKGKey
-	if source == "PVMBG" {
-		base, key = c.PVMBGURL, c.PVMBGToken
+	origins := map[string][2]string{
+		aggregator.SourceBMKG:  {c.BMKGURL, c.BMKGKey},
+		aggregator.SourcePVMBG: {c.PVMBGURL, c.PVMBGToken},
 	}
+	base, key := origins[source][0], origins[source][1]
 
 	transport := &http.Transport{
 		MaxConnsPerHost:       1,
@@ -159,7 +160,7 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 
 		runner := leadership.NewRunner(leaseLeader{election}, cluster, log)
 
-		for _, source := range []string{"BMKG", "PVMBG"} {
+		for _, source := range aggregator.PolledSources {
 			work := sourcePollWork(c, store, source, log)
 
 			launch(func(ctx context.Context) { runner.Run(ctx, source, work) })
@@ -174,7 +175,7 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 		return replay, nil
 	}
 
-	for _, source := range []string{"BMKG", "PVMBG"} {
+	for _, source := range aggregator.PolledSources {
 		epoch, err := store.Epoch(ctx, source)
 		if err != nil {
 			return nil, err

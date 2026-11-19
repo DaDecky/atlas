@@ -111,11 +111,7 @@ func (p *Poller) fetchOnce(ctx context.Context, path string, since *time.Time, i
 
 	req.Header.Set("X-Correlation-ID", id)
 
-	if p.Source == "BMKG" {
-		req.Header.Set("X-BMKG-Key", p.Credential)
-	} else {
-		req.Header.Set("Authorization", "Bearer "+p.Credential)
-	}
+	pollerSources[p.Source].authorize(req, p.Credential)
 
 	start := time.Now()
 
@@ -222,15 +218,11 @@ func (p *Poller) fetchWarnings(ctx context.Context, checkpoint *time.Time, id st
 }
 
 func (p *Poller) Poll(ctx context.Context, id string) error {
-	var policy SchemaPolicy
+	src := pollerSources[p.Source]
 
-	if p.Source == "PVMBG" {
-		var err error
-
-		policy, err = ReadSchemaPolicy(p.PolicyFile)
-		if err != nil {
-			return err
-		}
+	policy, err := p.schemaPolicy(src)
+	if err != nil {
+		return err
 	}
 
 	start := time.Now()
@@ -241,52 +233,58 @@ func (p *Poller) Poll(ctx context.Context, id string) error {
 		return errors.New("checkpoint read failed")
 	}
 
-	path, idField, timeField := "/volcanic-reports", "report_id", "reported_at"
-	if p.Source == "BMKG" {
-		path, idField, timeField = "/seismic-events", "event_id", "occurred_at"
-	}
-
-	raw, err := p.fetch(ctx, path, checkpoint, id)
+	raw, err := p.fetch(ctx, src.path, checkpoint, id)
 	if err != nil {
 		return err
 	}
 
 	warnings := []Warning{}
-	if p.Source == "BMKG" {
+	if src.warnings {
 		if warnings, err = p.fetchWarnings(ctx, checkpoint, id); err != nil {
 			return err
 		}
 	}
 
+	events, seen, checkpoint, err := p.mapRecords(ctx, id, src, raw, warnings, policy, checkpoint)
+	if err != nil {
+		return err
+	}
+
+	revised, err := p.revisedByWarnings(ctx, id, warnings, seen)
+	if err != nil {
+		return err
+	}
+
+	return p.save(ctx, id, append(events, revised...), checkpoint)
+}
+
+// mapRecords maps each record and parks the ones that fail. Rejected records still
+// advance the checkpoint, so one bad record cannot stall the source.
+func (p *Poller) mapRecords(ctx context.Context, id string, src pollerSource, raw []sourceRecord, warnings []Warning, policy SchemaPolicy, checkpoint *time.Time) (
+	[]HazardEvent, map[string]bool, *time.Time, error,
+) {
 	now := time.Now().UTC()
 	events := []HazardEvent{}
 	seen := map[string]bool{}
 
 	for _, record := range raw {
 		o := record.Object
-		// Rejected records still advance the checkpoint, so one bad record cannot stall the source.
-		if t, err := timestamp(o, timeField); err == nil && (checkpoint == nil || t.After(*checkpoint)) {
+		if t, err := timestamp(o, src.timeField); err == nil && (checkpoint == nil || t.After(*checkpoint)) {
 			checkpoint = &t
 		}
 
-		var h HazardEvent
-		if p.Source == "BMKG" {
-			h, err = MapSeismic(o, warnings, now)
-		} else {
-			h, err = policy.MapVolcanic(o, now)
-		}
-
+		h, err := src.mapRecord(o, warnings, policy, now)
 		if err == nil && seen[h.SourceRefID] {
 			p.reject(id, h.SourceRefID, "duplicate source ID")
 			continue
 		}
 
 		if err != nil {
-			ref, _ := textField(o, idField)
+			ref, _ := textField(o, src.idField)
 			p.reject(id, ref, err.Error())
 
-			if parkErr := p.park(ctx, path, id, record.Raw, "schema_violation", err.Error(), nil); parkErr != nil {
-				return parkErr
+			if parkErr := p.park(ctx, src.path, id, record.Raw, "schema_violation", err.Error(), nil); parkErr != nil {
+				return nil, nil, nil, parkErr
 			}
 
 			continue
@@ -296,6 +294,11 @@ func (p *Poller) Poll(ctx context.Context, id string) error {
 		events = append(events, h)
 	}
 
+	return events, seen, checkpoint, nil
+}
+
+// revisedByWarnings applies warnings to stored events that this poll did not fetch again.
+func (p *Poller) revisedByWarnings(ctx context.Context, id string, warnings []Warning, seen map[string]bool) ([]HazardEvent, error) {
 	refs := []string{}
 
 	for _, w := range warnings {
@@ -304,27 +307,34 @@ func (p *Poller) Poll(ctx context.Context, id string) error {
 		}
 	}
 
-	if len(refs) > 0 {
-		start = time.Now()
-		old, err := p.Store.WarningEvents(ctx, refs)
-		logDatabaseCall(p.Log, id, "warning_events", start, err)
-
-		if err != nil {
-			return errors.New("warning lookup failed")
-		}
-
-		for _, h := range old {
-			events = append(events, ApplyWarnings(h, warnings))
-		}
+	if len(refs) == 0 {
+		return nil, nil
 	}
 
+	start := time.Now()
+	old, err := p.Store.WarningEvents(ctx, refs)
+	logDatabaseCall(p.Log, id, "warning_events", start, err)
+
+	if err != nil {
+		return nil, errors.New("warning lookup failed")
+	}
+
+	revised := make([]HazardEvent, 0, len(old))
+	for _, h := range old {
+		revised = append(revised, ApplyWarnings(h, warnings))
+	}
+
+	return revised, nil
+}
+
+func (p *Poller) save(ctx context.Context, id string, events []HazardEvent, checkpoint *time.Time) error {
 	if p.Guard != nil {
-		if err = p.Guard(ctx); err != nil {
+		if err := p.Guard(ctx); err != nil {
 			return err
 		}
 	}
 
-	start = time.Now()
+	start := time.Now()
 	changed, err := p.Store.Save(ctx, p.Source, events, checkpoint, time.Now().UTC())
 	logDatabaseCall(p.Log, id, "save", start, err)
 
