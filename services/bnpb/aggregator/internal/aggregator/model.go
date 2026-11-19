@@ -77,3 +77,17 @@ func sources(q Query) []string {
 // CanonicalHazardID is shared by source adapters and data tools. A replay must
 // retain the same source/reference pair to address the same canonical event.
 func CanonicalHazardID(source, ref string) string { return hazardID(source, ref) }
+
+// deriveFreshness gives a source with no usable data unavailable, a source that never
+// succeeded or whose last poll failed stale, and every other source healthy.
+func deriveFreshness(lastSuccess, staleSince *time.Time, hasEvents bool) string {
+	if !hasEvents {
+		return "unavailable"
+	}
+
+	if lastSuccess == nil || staleSince != nil {
+		return "stale"
+	}
+
+	return "healthy"
+}

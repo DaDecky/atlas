@@ -43,6 +43,14 @@ type Parking interface {
 	RetryDue(context.Context, string, int64, int, func(ParkedMessage) (HazardEvent, error)) (int, error)
 }
 
+const (
+	parkingRetrying  = "retrying"
+	parkingParked    = "parked"
+	parkingRecovered = "recovered"
+	// A retryable message gets five attempts, waiting 1, 2, 4, 8, and 16 seconds.
+	parkingAttempts = 5
+)
+
 const parkingColumns = `message_id,source,received_at,source_ref_id,raw,raw_length,raw_sha256,raw_cut,reason_code,reason,retryable,attempts,next_attempt_at,status,correlation_id`
 
 // Row limits alone allow 1000 four-MiB records to exhaust a 512-MiB pod.
@@ -78,12 +86,7 @@ func (s *Store) park(ctx context.Context, m ParkedMessage, epoch int64) error {
 		return errors.New("invalid cut body metadata")
 	}
 
-	m.Status = "parked"
-	if m.Retryable {
-		m.Status = "retrying"
-		next := m.ReceivedAt.Add(time.Second)
-		m.NextAttemptAt = &next
-	}
+	m.Status, m.NextAttemptAt = nextParkingStatus(m.Retryable, true, 0, m.ReceivedAt)
 
 	tx, err := s.begin(ctx, false)
 	if err != nil {
@@ -218,7 +221,7 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 			continue
 		}
 
-		if dueOnly && (m.Status != "retrying" || m.NextAttemptAt == nil || m.NextAttemptAt.After(time.Now())) {
+		if dueOnly && (m.Status != parkingRetrying || m.NextAttemptAt == nil || m.NextAttemptAt.After(time.Now())) {
 			blocked[m.SourceRefID] = true
 			continue
 		}
@@ -230,15 +233,7 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 
 		if decodeErr != nil {
 			attempts := m.Attempts + 1
-			status := "parked"
-
-			var next *time.Time
-
-			if m.Retryable && attempts < 5 {
-				status = "retrying"
-				value := time.Now().UTC().Add(time.Second * time.Duration(1<<attempts))
-				next = &value
-			}
+			status, next := nextParkingStatus(m.Retryable, true, attempts, time.Now().UTC())
 
 			if _, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET attempts=$2,status=$3,next_attempt_at=$4 WHERE message_id=$1`, m.MessageID, attempts, status, next); err != nil {
 				return 0, err
@@ -345,4 +340,19 @@ func RunParkingRetries(ctx context.Context, p Parking, source string, epoch int6
 			return
 		}
 	}
+}
+
+// nextParkingStatus decides where a message goes after attempt number attempts, counting the first park as 0.
+func nextParkingStatus(retryable, failed bool, attempts int, now time.Time) (string, *time.Time) {
+	if !failed {
+		return parkingRecovered, nil
+	}
+
+	if !retryable || attempts >= parkingAttempts {
+		return parkingParked, nil
+	}
+
+	next := now.Add(time.Second << attempts)
+
+	return parkingRetrying, &next
 }

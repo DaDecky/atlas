@@ -167,12 +167,12 @@ func publicationMessageID(id string, revision int64) string {
 
 func parkPublication(ctx context.Context, tx pgx.Tx, id, source string, raw []byte, correlation string, attempts int, created time.Time, failure error, retryable bool) error {
 	sum := sha256.Sum256(raw)
-	status := "parked"
+	status := parkingParked
 
 	var next *time.Time
 
 	if retryable {
-		status = "retrying"
+		status = parkingRetrying
 		value := time.Now().UTC().Add(publicationRetryDelay)
 		next = &value
 	}

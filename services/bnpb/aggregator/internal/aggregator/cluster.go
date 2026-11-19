@@ -514,11 +514,9 @@ func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
 			defer tx.Rollback(call)
 
 			err = tx.QueryRow(call, `SELECT last_success_at,stale_since FROM source_progress WHERE source=$1`, source).Scan(&fresh.LastSuccessAt, &fresh.StaleSince)
-			if err == nil && fresh.LastSuccessAt != nil {
-				fresh.Status = "healthy"
-				if fresh.StaleSince != nil {
-					fresh.Status = "stale"
-				}
+			if err == nil {
+				// The events sit in 48 shards, so a source that never succeeded counts as having none.
+				fresh.Status = deriveFreshness(fresh.LastSuccessAt, fresh.StaleSince, fresh.LastSuccessAt != nil)
 			}
 
 			return fresh, err

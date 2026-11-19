@@ -336,13 +336,7 @@ func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
 			return out, fmt.Errorf("freshness query: %w", err)
 		}
 
-		f.Status = "healthy"
-		if f.LastSuccessAt == nil || f.StaleSince != nil {
-			f.Status = "stale"
-			if !has {
-				f.Status = "unavailable"
-			}
-		}
+		f.Status = deriveFreshness(f.LastSuccessAt, f.StaleSince, has)
 
 		out.Sources = append(out.Sources, f)
 	}

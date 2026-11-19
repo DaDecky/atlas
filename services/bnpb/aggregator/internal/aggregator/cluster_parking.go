@@ -227,7 +227,7 @@ func (c *Cluster) replay(ctx context.Context, source string, epoch int64, limit 
 			continue
 		}
 
-		if dueOnly && (m.Status != "retrying" || m.NextAttemptAt == nil || m.NextAttemptAt.After(time.Now())) {
+		if dueOnly && (m.Status != parkingRetrying || m.NextAttemptAt == nil || m.NextAttemptAt.After(time.Now())) {
 			blocked[m.SourceRefID] = true
 			continue
 		}
@@ -340,18 +340,7 @@ func (c *Cluster) markParking(ctx context.Context, source string, epoch int64, m
 		}
 
 		if err == nil {
-			status := "recovered"
-
-			var next *time.Time
-
-			if !recovered {
-				status = "parked"
-				if m.Retryable && m.Attempts+1 < 5 {
-					status = "retrying"
-					v := time.Now().UTC().Add(time.Second * time.Duration(1<<(m.Attempts+1)))
-					next = &v
-				}
-			}
+			status, next := nextParkingStatus(m.Retryable, !recovered, m.Attempts+1, time.Now().UTC())
 
 			_, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET status=$2,attempts=attempts+1,next_attempt_at=$3 WHERE message_id=$1 AND status<>'recovered'`, m.MessageID, status, next)
 		}
