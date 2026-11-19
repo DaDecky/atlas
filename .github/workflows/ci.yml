@@ -75,6 +75,26 @@ jobs:
       - run: ./scripts/env.sh
       - run: docker compose config -q
 
+  manifest-check:
+    name: manifest-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Renders each overlay and validates every object against the Kubernetes schemas.
+      - run: |
+          set -o pipefail
+          for overlay in dev demo; do
+            docker run --rm -v "$PWD:/work" -w /work \
+              registry.k8s.io/kustomize/kustomize:v5.8.3@sha256:429eda4a1c76a7de458d0c4ca3ded9b5d764899ff6bdaeccc1d98b1b6ee873e4 \
+              build "deploy/k8s/overlays/$overlay" \
+            | docker run --rm -i \
+              ghcr.io/yannh/kubeconform:v0.8.0-alpine@sha256:6b90a5f23d846140ce0194fe050b1995e546eba938f3a6bf10c039dd5e24588f \
+              -strict -summary
+          done
+
   secret-scan:
     name: secret-scan
     runs-on: ubuntu-latest
