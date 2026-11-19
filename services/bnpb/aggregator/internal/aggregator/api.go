@@ -91,13 +91,13 @@ func parseQuery(r *http.Request) (Query, error) {
 
 			q.Source = v
 		case "hazard_type":
-			if v != "SEISMIC" && v != "VOLCANIC" && v != "WILDFIRE" && v != "COASTAL" {
+			if !validHazardType(v) {
 				return q, errors.New("hazard type")
 			}
 
 			q.HazardType = v
 		case "severity":
-			if v != "NORMAL" && v != "WASPADA" && v != "SIAGA" && v != "AWAS" {
+			if !severities[v] {
 				return q, errors.New("severity")
 			}
 

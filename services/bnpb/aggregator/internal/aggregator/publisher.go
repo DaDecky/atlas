@@ -25,6 +25,7 @@ type RabbitPublisher struct {
 
 type EventPublisher interface {
 	Publish(context.Context, Publication) error
+	PublishCritical(context.Context, Publication) error
 	Close()
 }
 

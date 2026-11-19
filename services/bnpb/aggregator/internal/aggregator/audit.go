@@ -233,7 +233,7 @@ func checksumStores(ctx context.Context, source string, stores map[string]*Store
 
 	requested := []string{source}
 	if source == "" {
-		requested = []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"}
+		requested = Sources
 	}
 
 	for key, s := range stores {

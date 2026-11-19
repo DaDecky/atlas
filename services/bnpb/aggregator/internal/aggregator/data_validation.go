@@ -6,8 +6,6 @@ import (
 	"math"
 )
 
-var sourceTypes = map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
-
 func validateBatch(b WriteBatch) error {
 	if !validSource(b.Source) || b.Now.IsZero() {
 		return errors.New("valid source and ingestion time required")
@@ -34,7 +32,7 @@ func validateBatch(b WriteBatch) error {
 			return errors.New("hazard type differs from source")
 		}
 
-		if h.Severity != "NORMAL" && h.Severity != "WASPADA" && h.Severity != "SIAGA" && h.Severity != "AWAS" {
+		if !severities[h.Severity] {
 			return errors.New("invalid severity")
 		}
 
@@ -55,5 +53,17 @@ func validateBatch(b WriteBatch) error {
 }
 
 func validSource(source string) bool {
-	return source == "BMKG" || source == "PVMBG" || source == "SATELIT" || source == "SENSOR_PANTAI"
+	_, ok := sourceTypes[source]
+
+	return ok
+}
+
+func validHazardType(hazardType string) bool {
+	for _, known := range sourceTypes {
+		if hazardType == known {
+			return true
+		}
+	}
+
+	return false
 }

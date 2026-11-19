@@ -146,14 +146,7 @@ func (s *Store) relayOne(ctx context.Context, p EventPublisher, criticalOnly boo
 
 func publishEvent(ctx context.Context, p EventPublisher, item Publication, critical bool) error {
 	if critical {
-		publisher, ok := p.(interface {
-			PublishCritical(context.Context, Publication) error
-		})
-		if !ok {
-			return errors.New("publisher has no critical lane")
-		}
-
-		if err := publisher.PublishCritical(ctx, item); err != nil {
+		if err := p.PublishCritical(ctx, item); err != nil {
 			return err
 		}
 	}

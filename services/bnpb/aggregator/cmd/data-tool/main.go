@@ -37,7 +37,7 @@ func run() error {
 			return err
 		}
 
-		for _, source := range []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"} {
+		for _, source := range aggregator.Sources {
 			table.WriterEpochs[source] = 1
 		}
 

@@ -160,6 +160,10 @@ func (p *timeoutPublisher) Publish(ctx context.Context, _ Publication) error {
 	return context.Cause(ctx)
 }
 
+func (p *timeoutPublisher) PublishCritical(ctx context.Context, item Publication) error {
+	return p.Publish(ctx, item)
+}
+
 func (*timeoutPublisher) Close() {}
 
 func TestIntegrationOutboxPersistsTimeoutAttempts(t *testing.T) {

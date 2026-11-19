@@ -22,6 +22,9 @@ type ShardStore interface {
 	Epoch(context.Context, string) (int64, error)
 	Seal(context.Context, string, int64) error
 	MarkBehind(context.Context, BehindRequest) error
+	WarningEvents(context.Context, []string) ([]HazardEvent, error)
+	failureEpoch(context.Context, string, time.Time, int64) error
+	park(context.Context, ParkedMessage, int64) error
 }
 
 // WriteBatch belongs to exactly one source and one sealed writer epoch.

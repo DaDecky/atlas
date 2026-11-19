@@ -38,14 +38,7 @@ func (e *EpochIngest) Park(ctx context.Context, message ParkedMessage) error {
 		return errors.New("parking writer is bound to another source")
 	}
 
-	switch data := e.Data.(type) {
-	case *Store:
-		return data.park(ctx, message, e.WriterEpoch)
-	case *Cluster:
-		return data.park(ctx, message, e.WriterEpoch)
-	}
-
-	return errors.New("parking unavailable")
+	return e.Data.park(ctx, message, e.WriterEpoch)
 }
 
 // OpenClusterConfig reads mounted configuration containing node DSNs and API
@@ -174,25 +167,11 @@ func (e *EpochIngest) Failure(ctx context.Context, source string, now time.Time)
 		return errors.New("freshness writer is bound to another source")
 	}
 
-	switch data := e.Data.(type) {
-	case *Store:
-		return data.failureEpoch(ctx, source, now, e.WriterEpoch)
-	case *Cluster:
-		return data.failureEpoch(ctx, source, now, e.WriterEpoch)
-	}
-
-	return errors.New("unsupported freshness store")
+	return e.Data.failureEpoch(ctx, source, now, e.WriterEpoch)
 }
 
 func (e *EpochIngest) WarningEvents(ctx context.Context, refs []string) ([]HazardEvent, error) {
-	switch data := e.Data.(type) {
-	case *Store:
-		return data.WarningEvents(ctx, refs)
-	case *Cluster:
-		return data.WarningEvents(ctx, refs)
-	}
-
-	return nil, errors.New("unsupported warning store")
+	return e.Data.WarningEvents(ctx, refs)
 }
 
 func (c *Cluster) Failure(ctx context.Context, source string, now time.Time) error {

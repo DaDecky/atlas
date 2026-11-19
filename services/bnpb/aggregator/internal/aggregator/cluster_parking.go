@@ -65,7 +65,7 @@ func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, li
 
 	requested := []string{source}
 	if source == "" {
-		requested = []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"}
+		requested = Sources
 	}
 
 	var cutoff *ParkedMessage

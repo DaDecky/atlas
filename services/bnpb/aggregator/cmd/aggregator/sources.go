@@ -239,7 +239,7 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 		return nil, err
 	}
 
-	streams := map[string]sourceWork{"SATELIT": sat, aggregator.SensorSource: sensorWork(c, store, log)}
+	streams := map[string]sourceWork{aggregator.SourceSatellite: sat, aggregator.SourceSensorPantai: sensorWork(c, store, log)}
 
 	if cluster, ok := store.(*aggregator.Cluster); ok {
 		election, err := sourceElection(log)

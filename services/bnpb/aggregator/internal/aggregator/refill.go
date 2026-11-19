@@ -256,7 +256,7 @@ func copyShard(ctx context.Context, from, to *Store) error {
 		return err
 	}
 
-	for _, source := range []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"} {
+	for _, source := range Sources {
 		var (
 			progress   Freshness
 			checkpoint *time.Time

@@ -45,6 +45,28 @@ type Response struct {
 	NextCursor       *string       `json:"next_cursor"`
 }
 
+// The four sources, their hazard types, and the severities are named here once.
+const (
+	SourceBMKG         = "BMKG"
+	SourcePVMBG        = "PVMBG"
+	SourceSatellite    = "SATELIT"
+	SourceSensorPantai = "SENSOR_PANTAI"
+)
+
+const (
+	SeverityNormal  = "NORMAL"
+	SeverityWaspada = "WASPADA"
+	SeveritySiaga   = "SIAGA"
+	SeverityAwas    = "AWAS"
+)
+
+// Sources lists every source in the order that reads report them.
+var Sources = []string{SourceBMKG, SourcePVMBG, SourceSatellite, SourceSensorPantai}
+
+var sourceTypes = map[string]string{SourceBMKG: "SEISMIC", SourcePVMBG: "VOLCANIC", SourceSatellite: "WILDFIRE", SourceSensorPantai: "COASTAL"}
+
+var severities = map[string]bool{SeverityNormal: true, SeverityWaspada: true, SeveritySiaga: true, SeverityAwas: true}
+
 func hazardID(source, ref string) string {
 	sum := sha256.Sum256([]byte(source + "\x00" + ref))
 	return hex.EncodeToString(sum[:])
@@ -55,23 +77,13 @@ func sources(q Query) []string {
 		return []string{q.Source}
 	}
 
-	if q.HazardType == "SEISMIC" {
-		return []string{"BMKG"}
+	for source, hazardType := range sourceTypes {
+		if q.HazardType == hazardType {
+			return []string{source}
+		}
 	}
 
-	if q.HazardType == "VOLCANIC" {
-		return []string{"PVMBG"}
-	}
-
-	if q.HazardType == "WILDFIRE" {
-		return []string{"SATELIT"}
-	}
-
-	if q.HazardType == "COASTAL" {
-		return []string{"SENSOR_PANTAI"}
-	}
-
-	return []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"}
+	return Sources
 }
 
 // CanonicalHazardID is shared by source adapters and data tools. A replay must
