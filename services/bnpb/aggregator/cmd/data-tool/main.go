@@ -57,7 +57,7 @@ func run() error {
 
 		ctx := context.Background()
 
-		store, err := aggregator.OpenStore(ctx, url, 2, 4)
+		store, err := aggregator.OpenStore(ctx, url, 2, 4, 2*time.Second)
 		if err != nil {
 			return err
 		}

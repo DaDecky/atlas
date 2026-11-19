@@ -30,7 +30,7 @@ func TestIntegrationSatelliteProcessCrash(t *testing.T) {
 
 		ctx := context.Background()
 
-		store, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4)
+		store, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4, defaultDBConnectTimeout)
 		if err != nil {
 			t.Fatal(err)
 		}

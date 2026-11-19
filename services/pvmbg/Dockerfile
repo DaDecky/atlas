@@ -10,5 +10,5 @@ RUN adduser -D -u 10001 atlas
 COPY --from=build /pvmbg /usr/local/bin/pvmbg
 USER atlas
 EXPOSE 8082
-HEALTHCHECK --interval=10s --timeout=3s CMD wget -q -O /dev/null http://127.0.0.1:8082/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/health"]
 ENTRYPOINT ["pvmbg"]

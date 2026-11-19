@@ -12,5 +12,5 @@ COPY --from=build /aggregator /usr/local/bin/aggregator
 COPY --from=build /data-tool /usr/local/bin/data-tool
 USER atlas
 EXPOSE 8083
-HEALTHCHECK --interval=10s --timeout=3s CMD wget -q -O /dev/null http://127.0.0.1:8083/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8083/health"]
 ENTRYPOINT ["aggregator"]

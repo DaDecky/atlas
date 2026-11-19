@@ -1,6 +1,7 @@
 package aggregator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,20 +30,15 @@ type Poller struct {
 	Source, BaseURL, Credential string
 	Interval, Timeout, Backoff  time.Duration
 	Retries                     int
+	MaxRecords, MaxSourceBytes  int
+	WarningLookback             time.Duration
+	FailureMarkTimeout          time.Duration
 	Client                      *http.Client
 	Store                       IngestStore
 	Pending                     chan<- Publication
 	Log                         *slog.Logger
 	PolicyFile                  string
 }
-
-const (
-	MaxRecords     = 1000
-	MaxSourceBytes = 4 << 20
-)
-
-// Warnings for events up to this long before the checkpoint are fetched again, so late warnings still apply.
-const WarningLookback = time.Hour
 
 func pause(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
@@ -147,7 +143,7 @@ func (p *Poller) fetchOnce(ctx context.Context, path string, since *time.Time, i
 		return nil, status, fmt.Errorf("source status %d", status)
 	}
 
-	err = decode.Array(resp.Body, decode.Limits{BodyBytes: MaxSourceBytes, Records: MaxRecords}, func(record decode.Record) error {
+	err = decode.Array(resp.Body, decode.Limits{BodyBytes: min(cmp.Or(p.MaxSourceBytes, defaultMaxSourceBytes), defaultMaxSourceBytes), Records: cmp.Or(p.MaxRecords, defaultMaxSourceRecords)}, func(record decode.Record) error {
 		if record.Code != "" {
 			p.reject(id, "", record.Code)
 			return p.park(ctx, path, id, record.Raw, record.Code, "record failed boundary validation", nil)
@@ -179,7 +175,7 @@ func (p *Poller) fetchWarnings(ctx context.Context, checkpoint *time.Time, id st
 	var since *time.Time
 
 	if checkpoint != nil {
-		t := checkpoint.Add(-WarningLookback)
+		t := checkpoint.Add(-cmp.Or(p.WarningLookback, defaultWarningLookback))
 		since = &t
 	}
 
@@ -360,7 +356,7 @@ func (p *Poller) Run(ctx context.Context) {
 		cancel()
 
 		if err != nil && ctx.Err() == nil {
-			failureCtx, stop := context.WithTimeout(ctx, 2*time.Second)
+			failureCtx, stop := context.WithTimeout(ctx, cmp.Or(p.FailureMarkTimeout, defaultFailureMarkTimeout))
 			start := time.Now()
 			markErr := p.Store.Failure(failureCtx, p.Source, time.Now().UTC())
 			logDatabaseCall(p.Log, id, "failure", start, markErr)

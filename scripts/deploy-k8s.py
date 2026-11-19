@@ -166,12 +166,12 @@ def main():
     secret("bmkg-credentials", {"DATABASE_URL": db("bmkg", values["BMKG_DB_PASSWORD"], "bmkg-db", "bmkg"), "BMKG_API_KEY": values["BMKG_API_KEY"]})
     secret("pvmbg-credentials", {"DATABASE_URL": db("pvmbg", values["PVMBG_DB_PASSWORD"], "pvmbg-db", "pvmbg"), "PVMBG_TOKEN": values["PVMBG_TOKEN"]})
     auth = selected("AUTH_VALIDATE_TOKEN", "AUTH_ED25519_PRIVATE_KEY_B64", "MEDIA_CLIENT_ID", "MEDIA_CLIENT_SECRET", "FIELD_TEAM_CLIENT_ID", "FIELD_TEAM_CLIENT_SECRET", "INTERNAL_OPS_CLIENT_ID", "INTERNAL_OPS_CLIENT_SECRET")
-    config("auth-config", selected("ACCESS_TOKEN_TTL"))
+    config("auth-config", {"ACCESS_TOKEN_TTL": values.get("ACCESS_TOKEN_TTL", "")})
     auth["AUTH_DATABASE_URL"] = db("auth", values["AUTH_DB_PASSWORD"], "auth-db", "auth")
     secret("auth-credentials", auth)
     aggregator = selected("BMKG_API_KEY", "PVMBG_TOKEN", "AGGREGATOR_INTERNAL_TOKEN", "AUDIT_TOKEN")
     aggregator.update(DATABASE_URL=db("aggregator", values["CANONICAL_DB_PASSWORD"], "canonical-store-0.canonical-store", "canonical"), RABBITMQ_URL=broker)
-    config("aggregator-config", {"POLL_INTERVAL": values["POLL_INTERVAL"], "BMKG_BASE_URL": "http://bmkg:8081", "PVMBG_BASE_URL": "http://pvmbg:8082"})
+    config("aggregator-config", {"POLL_INTERVAL": values.get("POLL_INTERVAL", ""), "BMKG_BASE_URL": "http://bmkg:8081", "PVMBG_BASE_URL": "http://pvmbg:8082"})
     if values.get("SATELLITE_TOKEN"):
         aggregator["SATELLITE_TOKEN"] = values["SATELLITE_TOKEN"]
     secret("aggregator-credentials", aggregator)

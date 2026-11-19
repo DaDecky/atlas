@@ -79,7 +79,7 @@ func (g *Generator) Next(now time.Time) (SeismicEvent, []TsunamiWarning) {
 	}}
 }
 
-func RunGenerator(ctx context.Context, store Store, gen *Generator, interval time.Duration, log *slog.Logger) {
+func RunGenerator(ctx context.Context, store Store, gen *Generator, interval, writeTimeout time.Duration, log *slog.Logger) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -90,7 +90,7 @@ func RunGenerator(ctx context.Context, store Store, gen *Generator, interval tim
 		case now := <-ticker.C:
 			event, warnings := gen.Next(now)
 			id := newCorrelationID()
-			writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 			start := time.Now()
 			err := store.Add(writeCtx, event, warnings...)
 

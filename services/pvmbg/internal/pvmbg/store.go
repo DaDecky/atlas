@@ -29,14 +29,14 @@ var schema string
 //go:embed seed/volcanic-reports.json
 var seed []byte
 
-func OpenStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
+func OpenStore(ctx context.Context, databaseURL string, poolSize int32, connectTimeout time.Duration) (*PostgresStore, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, errors.New("invalid PVMBG database URL")
 	}
 
-	cfg.MaxConns = 8
-	cfg.ConnConfig.ConnectTimeout = 2 * time.Second
+	cfg.MaxConns = poolSize
+	cfg.ConnConfig.ConnectTimeout = connectTimeout
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -124,22 +124,22 @@ func (s *PostgresStore) SetSchemaVersion(ctx context.Context, version int) error
 	return err
 }
 
-func seedRecords() ([]VolcanicReport, error) {
+func seedRecords(minRecords int) ([]VolcanicReport, error) {
 	var reports []VolcanicReport
 	if err := json.Unmarshal(seed, &reports); err != nil {
 		return nil, fmt.Errorf("volcanic seed: %w", err)
 	}
 
-	if len(reports) < MinSeedRecords {
-		return nil, fmt.Errorf("seed has %d reports, need at least %d", len(reports), MinSeedRecords)
+	if len(reports) < minRecords {
+		return nil, fmt.Errorf("seed has %d reports, need at least %d", len(reports), minRecords)
 	}
 
 	return reports, nil
 }
 
-// LoadSeed stores the embedded seed reports, so every start serves at least MinSeedRecords historical reports.
-func LoadSeed(ctx context.Context, store Store) error {
-	reports, err := seedRecords()
+// LoadSeed stores the embedded seed reports, so every start serves at least minRecords historical reports.
+func LoadSeed(ctx context.Context, store Store, minRecords int) error {
+	reports, err := seedRecords(minRecords)
 	if err != nil {
 		return err
 	}

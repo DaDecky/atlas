@@ -5,6 +5,24 @@ import (
 	"time"
 )
 
+func TestBrokerAndHTTPLimitsOverride(t *testing.T) {
+	t.Setenv("AMQP_URL", "amqp://example:example@localhost:5672/")
+	t.Setenv("BROKER_RECONNECT_DELAY", "250ms")
+	t.Setenv("HTTP_READ_TIMEOUT", "9s")
+
+	c, err := ConfigFromEnv()
+	if err != nil || c.BrokerReconnectDelay != 250*time.Millisecond || c.HTTPReadTimeout != 9*time.Second ||
+		c.BrokerHeartbeat != 10*time.Second {
+		t.Fatalf("configured=%+v err=%v", c, err)
+	}
+
+	t.Setenv("BROKER_RECONNECT_DELAY", "1ms")
+
+	if _, err = ConfigFromEnv(); err == nil {
+		t.Fatal("out of range delay accepted")
+	}
+}
+
 func TestQueueConfiguration(t *testing.T) {
 	t.Setenv("AMQP_URL", "amqp://example:example@localhost:5672/")
 

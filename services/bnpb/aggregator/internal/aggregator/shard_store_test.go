@@ -225,7 +225,7 @@ func TestIntegrationShardStoreRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restarted, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4)
+	restarted, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

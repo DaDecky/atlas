@@ -89,7 +89,7 @@ func seededStore(t *testing.T) *memoryStore {
 	t.Helper()
 
 	m := &memoryStore{}
-	if err := LoadSeed(context.Background(), m); err != nil {
+	if err := LoadSeed(context.Background(), m, MinSeedRecords); err != nil {
 		t.Fatal(err)
 	}
 

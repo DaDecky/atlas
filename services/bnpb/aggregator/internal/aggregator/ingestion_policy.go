@@ -152,7 +152,7 @@ func (p *Poller) park(ctx context.Context, path, id string, raw []byte, code, re
 }
 
 func (p *Poller) DecodeParked(ctx context.Context, m ParkedMessage) (HazardEvent, error) {
-	if m.RawCut || m.Source != p.Source || len(m.Raw) > MaxSourceBytes {
+	if m.RawCut || m.Source != p.Source || len(m.Raw) > defaultMaxSourceBytes {
 		return HazardEvent{}, errors.New("message requires source repair")
 	}
 
@@ -160,7 +160,7 @@ func (p *Poller) DecodeParked(ctx context.Context, m ParkedMessage) (HazardEvent
 
 	reader := io.MultiReader(strings.NewReader("["), bytes.NewReader(m.Raw), strings.NewReader("]"))
 
-	err := decode.Array(reader, decode.Limits{BodyBytes: MaxSourceBytes + 2, Records: 1}, func(record decode.Record) error {
+	err := decode.Array(reader, decode.Limits{BodyBytes: defaultMaxSourceBytes + 2, Records: 1}, func(record decode.Record) error {
 		if record.Code != "" {
 			return errors.New("parked record fails boundary validation")
 		}

@@ -94,7 +94,7 @@ func testAPI(t *testing.T, delay time.Duration) *API {
 	t.Helper()
 
 	store := &memoryStore{version: 1}
-	if err := LoadSeed(context.Background(), store); err != nil {
+	if err := LoadSeed(context.Background(), store, MinSeedRecords); err != nil {
 		t.Fatal(err)
 	}
 

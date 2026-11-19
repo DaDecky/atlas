@@ -28,7 +28,7 @@ func integrationStore(t *testing.T) *Store {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	s, err := OpenStore(ctx, url, 2, 4)
+	s, err := OpenStore(ctx, url, 2, 4, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestIntegrationStoreCommitRollbackRestartAndOwnership(t *testing.T) {
 		t.Fatal("rollback left row", data, err)
 	}
 
-	restarted, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4)
+	restarted, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 func TestSeedMeetsContract(t *testing.T) {
-	reports, err := seedRecords()
+	reports, err := seedRecords(MinSeedRecords)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func integrationStore(t *testing.T) *PostgresStore {
 		t.Skip("set PVMBG_TEST_DATABASE_URL or run make integration")
 	}
 
-	s, err := OpenStore(context.Background(), url)
+	s, err := OpenStore(context.Background(), url, defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,12 +67,12 @@ func TestIntegrationStorePersistsReportsAndSchemaVersion(t *testing.T) {
 	ctx := context.Background()
 	// Loading twice proves seeding on every start never duplicates records.
 	for range 2 {
-		if err := LoadSeed(ctx, s); err != nil {
+		if err := LoadSeed(ctx, s, MinSeedRecords); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	seed, _ := seedRecords()
+	seed, _ := seedRecords(MinSeedRecords)
 
 	all, err := s.Reports(ctx, nil)
 	if err != nil || len(all) != len(seed) {
@@ -134,7 +134,7 @@ func TestIntegrationStorePersistsReportsAndSchemaVersion(t *testing.T) {
 	// A reopened store is what a restarted mock sees.
 	s.Close()
 
-	reopened, err := OpenStore(ctx, os.Getenv("PVMBG_TEST_DATABASE_URL"))
+	reopened, err := OpenStore(ctx, os.Getenv("PVMBG_TEST_DATABASE_URL"), defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,8 +39,35 @@ func validTestEnv(t *testing.T) {
 		t.Setenv(name, value)
 	}
 
-	for _, name := range []string{"AUTH_HTTP_ADDR", "ACCESS_TOKEN_TTL", "REFRESH_TOKEN_TTL"} {
+	for _, name := range []string{
+		"AUTH_HTTP_ADDR", "ACCESS_TOKEN_TTL", "REFRESH_TOKEN_TTL", "HTTP_READ_HEADER_TIMEOUT", "HTTP_READ_TIMEOUT",
+		"HTTP_WRITE_TIMEOUT", "HTTP_IDLE_TIMEOUT", "HTTP_MAX_HEADER_BYTES", "STARTUP_TIMEOUT", "SHUTDOWN_TIMEOUT",
+		"DB_CONNECT_TIMEOUT", "DB_POOL_SIZE", "STORE_TIMEOUT", "AUTH_MAX_BODY_BYTES",
+	} {
 		t.Setenv(name, "")
+	}
+}
+
+func TestConfigLimitsOverrideAndBounds(t *testing.T) {
+	validTestEnv(t)
+
+	t.Setenv("DB_POOL_SIZE", "16")
+	t.Setenv("STORE_TIMEOUT", "750ms")
+	t.Setenv("AUTH_MAX_BODY_BYTES", "4096")
+
+	c, err := ConfigFromEnv()
+	if err != nil || c.DBPoolSize != 16 || c.StoreTimeout != 750*time.Millisecond || c.MaxBodyBytes != 4096 {
+		t.Fatal(c, err)
+	}
+
+	for key, value := range map[string]string{"DB_POOL_SIZE": "0", "STORE_TIMEOUT": "1ms", "AUTH_MAX_BODY_BYTES": "10"} {
+		t.Setenv(key, value)
+
+		if _, err = ConfigFromEnv(); err == nil {
+			t.Fatal(key, "accepted")
+		}
+
+		t.Setenv(key, "")
 	}
 }
 

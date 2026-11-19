@@ -105,7 +105,7 @@ func TestIntegrationFieldReportConcurrentEffectAndRedeliveryBeforeAck(t *testing
 	// Drop the receiver after commit but before ack. The real broker requeues it.
 	_ = conn.Close()
 
-	reopened, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4)
+	reopened, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

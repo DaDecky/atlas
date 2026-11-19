@@ -14,12 +14,13 @@ import (
 
 // Called by a single worker. No network waits occur in a poller or read handler.
 type RabbitPublisher struct {
-	URL     string
-	Timeout time.Duration
-	Log     *slog.Logger
-	conn    *amqp.Connection
-	channel *amqp.Channel
-	socket  net.Conn
+	URL       string
+	Timeout   time.Duration
+	Heartbeat time.Duration
+	Log       *slog.Logger
+	conn      *amqp.Connection
+	channel   *amqp.Channel
+	socket    net.Conn
 }
 
 type EventPublisher interface {
@@ -70,7 +71,7 @@ func (p *RabbitPublisher) connect(ctx context.Context) error {
 		return s, nil
 	}
 
-	conn, err := amqp.DialConfig(p.URL, amqp.Config{Heartbeat: 10 * time.Second, Dial: dial})
+	conn, err := amqp.DialConfig(p.URL, amqp.Config{Heartbeat: p.Heartbeat, Dial: dial})
 	if err != nil {
 		p.Close()
 		return errors.New("broker connection failed")

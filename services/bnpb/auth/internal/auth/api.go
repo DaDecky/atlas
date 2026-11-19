@@ -27,6 +27,8 @@ type API struct {
 	Audience      string
 	AccessTTL     time.Duration
 	RefreshTTL    time.Duration
+	StoreTimeout  time.Duration
+	MaxBodyBytes  int64
 	Log           *slog.Logger
 }
 
@@ -56,8 +58,6 @@ type statusWriter struct {
 	status int
 }
 
-const storeTimeout = 2 * time.Second
-
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
@@ -80,7 +80,7 @@ func (a *API) Handler() http.Handler {
 
 func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	var in loginRequest
-	if !decodeBody(w, r, &in) {
+	if !a.decodeBody(w, r, &in) {
 		return
 	}
 
@@ -99,7 +99,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 	refresh := newRefreshToken(sessionID)
 	now := time.Now().UTC()
 
-	ctx, cancel := context.WithTimeout(r.Context(), storeTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), a.StoreTimeout)
 	defer cancel()
 
 	start := time.Now()
@@ -116,7 +116,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) refresh(w http.ResponseWriter, r *http.Request) {
 	var in refreshRequest
-	if !decodeBody(w, r, &in) {
+	if !a.decodeBody(w, r, &in) {
 		return
 	}
 
@@ -134,7 +134,7 @@ func (a *API) refresh(w http.ResponseWriter, r *http.Request) {
 	newRefresh := newRefreshToken(sessionID)
 	now := time.Now().UTC()
 
-	ctx, cancel := context.WithTimeout(r.Context(), storeTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), a.StoreTimeout)
 	defer cancel()
 
 	start := time.Now()
@@ -170,7 +170,7 @@ func (a *API) validate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var in validateRequest
-	if !decodeBody(w, r, &in) {
+	if !a.decodeBody(w, r, &in) {
 		return
 	}
 
@@ -179,7 +179,7 @@ func (a *API) validate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), storeTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), a.StoreTimeout)
 	defer cancel()
 
 	start := time.Now()
@@ -309,8 +309,8 @@ func writeError(w http.ResponseWriter, status int, code string) {
 	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code}})
 }
 
-func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+func (a *API) decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, a.MaxBodyBytes)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 

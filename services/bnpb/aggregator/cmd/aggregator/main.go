@@ -23,7 +23,7 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	startupTimeout := 15 * time.Second
+	startupTimeout := c.StartupTimeout
 	if os.Getenv("M2_DATA_CONFIG") != "" {
 		startupTimeout = 2 * time.Minute
 	}
@@ -66,7 +66,7 @@ func run(log *slog.Logger) error {
 	}
 
 	launch(func(ctx context.Context) {
-		aggregator.RunRelay(ctx, store, &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout, Log: log}, 200*time.Millisecond, func(err error) { log.Error("outbox_relay_failed", "reason", err.Error()) })
+		aggregator.RunRelay(ctx, store, &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout, Heartbeat: c.BrokerHeartbeat, Log: log}, 200*time.Millisecond, func(err error) { log.Error("outbox_relay_failed", "reason", err.Error()) })
 	})
 	launch((&aggregator.FieldReportsConsumer{URL: c.RabbitMQURL, Store: store, Log: log}).Run)
 
@@ -94,7 +94,7 @@ func run(log *slog.Logger) error {
 		transport := &http.Transport{
 			MaxConnsPerHost:       1,
 			MaxIdleConnsPerHost:   1,
-			IdleConnTimeout:       30 * time.Second,
+			IdleConnTimeout:       c.SourceIdleConnTimeout,
 			ResponseHeaderTimeout: c.SourceTimeout,
 		}
 		defer transport.CloseIdleConnections()
@@ -105,18 +105,22 @@ func run(log *slog.Logger) error {
 		}
 
 		poller := &aggregator.Poller{
-			Source:     source,
-			BaseURL:    base,
-			Credential: key,
-			Interval:   c.PollInterval,
-			Timeout:    c.SourceTimeout,
-			Backoff:    c.Backoff,
-			Retries:    c.SourceRetries,
-			Client:     client,
-			Store:      ingest,
-			Pending:    pending,
-			Log:        log,
-			PolicyFile: os.Getenv("SOURCE_SCHEMA_POLICY_FILE"),
+			Source:             source,
+			BaseURL:            base,
+			Credential:         key,
+			Interval:           c.PollInterval,
+			Timeout:            c.SourceTimeout,
+			Backoff:            c.Backoff,
+			Retries:            c.SourceRetries,
+			MaxRecords:         c.MaxSourceRecords,
+			MaxSourceBytes:     c.MaxSourceBytes,
+			WarningLookback:    c.WarningLookback,
+			FailureMarkTimeout: c.FailureMarkTimeout,
+			Client:             client,
+			Store:              ingest,
+			Pending:            pending,
+			Log:                log,
+			PolicyFile:         os.Getenv("SOURCE_SCHEMA_POLICY_FILE"),
 		}
 		if writer, ok := ingest.(*aggregator.EpochIngest); ok {
 			replay[source] = func(ctx context.Context, limit int) (int, error) {
@@ -153,11 +157,11 @@ func run(log *slog.Logger) error {
 	server := &http.Server{
 		Addr:              c.Address,
 		Handler:           dataHandler(api, store, c, replay),
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: c.HTTPReadHeaderTimeout,
+		ReadTimeout:       c.HTTPReadTimeout,
 		WriteTimeout:      c.QueryTimeout + time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		IdleTimeout:       c.HTTPIdleTimeout,
+		MaxHeaderBytes:    c.HTTPMaxHeaderBytes,
 	}
 
 	done := make(chan error, 1)
@@ -175,7 +179,7 @@ func run(log *slog.Logger) error {
 		cancel()
 	}
 
-	shutdown, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdown, finish := context.WithTimeout(context.Background(), c.ShutdownTimeout)
 	defer finish()
 
 	_ = server.Shutdown(shutdown)

@@ -23,7 +23,7 @@ func run(log *slog.Logger) error {
 	defer cancel()
 	// Reuse Auth and Aggregator connections under concurrent load.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.MaxIdleConnsPerHost = 128
+	transport.MaxIdleConnsPerHost = cfg.RequestCapacity
 	transport.MaxConnsPerHost = cfg.RequestCapacity
 	client := &http.Client{
 		Transport:     transport,
@@ -34,11 +34,11 @@ func run(log *slog.Logger) error {
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           api.Handler(),
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
 		WriteTimeout:      2*cfg.OutboundTimeout + time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
+		MaxHeaderBytes:    cfg.HTTPMaxHeaderBytes,
 	}
 
 	done := make(chan error, 1)
@@ -56,7 +56,7 @@ func run(log *slog.Logger) error {
 		cancel()
 	}
 
-	shutdown, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdown, finish := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer finish()
 
 	_ = server.Shutdown(shutdown)

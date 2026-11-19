@@ -24,7 +24,7 @@ func openData(ctx context.Context, c aggregator.Config) (runtimeData, error) {
 		return aggregator.OpenClusterConfig(ctx, path)
 	}
 
-	return aggregator.OpenStore(ctx, c.DatabaseURL, c.IngestPool, c.QueryPool)
+	return aggregator.OpenStore(ctx, c.DatabaseURL, c.IngestPool, c.QueryPool, c.DBConnectTimeout)
 }
 
 func dataHandler(api *aggregator.API, store runtimeData, c aggregator.Config, replay map[string]aggregator.ReplaySource) http.Handler {

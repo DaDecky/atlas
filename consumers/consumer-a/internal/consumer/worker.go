@@ -55,10 +55,10 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 	server := &http.Server{
 		Addr:              cfg.HealthAddr,
 		Handler:           health.Handler(),
-		ReadHeaderTimeout: 2 * time.Second,
-		ReadTimeout:       3 * time.Second,
-		WriteTimeout:      3 * time.Second,
-		IdleTimeout:       15 * time.Second,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
 	}
 
 	listener, err := net.Listen("tcp", cfg.HealthAddr)
@@ -87,7 +87,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 			log.Warn("consumer_disconnected", "queue", cfg.Queue, "reason", err.Error())
 		}
 
-		timer := time.NewTimer(time.Second)
+		timer := time.NewTimer(cfg.BrokerReconnectDelay)
 		select {
 		case <-runCtx.Done():
 			timer.Stop()
@@ -95,7 +95,7 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 		}
 	}
 
-	shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	shutdown, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
 	_ = server.Shutdown(shutdown)
@@ -137,10 +137,10 @@ func consumeOnce(ctx context.Context, cfg Config, state *ProcessedState, health 
 func subscribe(ctx context.Context, cfg Config, log *slog.Logger) (*amqp.Connection, <-chan amqp.Delivery, error) {
 	started := time.Now()
 	dial := func(network, address string) (net.Conn, error) {
-		return (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, network, address)
+		return (&net.Dialer{Timeout: cfg.BrokerDialTimeout}).DialContext(ctx, network, address)
 	}
 
-	conn, err := amqp.DialConfig(cfg.AMQPURL, amqp.Config{Heartbeat: 10 * time.Second, Dial: dial})
+	conn, err := amqp.DialConfig(cfg.AMQPURL, amqp.Config{Heartbeat: cfg.BrokerHeartbeat, Dial: dial})
 	if err != nil {
 		log.Warn("broker_connect_failed", "dependency", "rabbitmq", "latency_ms", time.Since(started).Milliseconds())
 		return nil, nil, err

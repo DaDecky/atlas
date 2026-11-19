@@ -11,7 +11,7 @@ import (
 )
 
 func TestSeedMeetsContract(t *testing.T) {
-	events, warnings, err := seedRecords()
+	events, warnings, err := seedRecords(MinSeedRecords)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func integrationStore(t *testing.T) *PostgresStore {
 		t.Skip("set BMKG_TEST_DATABASE_URL or run make integration")
 	}
 
-	s, err := OpenStore(context.Background(), url)
+	s, err := OpenStore(context.Background(), url, defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +81,12 @@ func TestIntegrationStorePersistsSeedAndFiltersSince(t *testing.T) {
 	ctx := context.Background()
 	// Loading twice proves seeding on every start never duplicates records.
 	for range 2 {
-		if err := LoadSeed(ctx, s); err != nil {
+		if err := LoadSeed(ctx, s, MinSeedRecords); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	seed, seedWarnings, _ := seedRecords()
+	seed, seedWarnings, _ := seedRecords(MinSeedRecords)
 
 	all, err := s.Events(ctx, nil)
 	if err != nil || len(all) != len(seed) {
@@ -164,7 +164,7 @@ func TestIntegrationStorePersistsSeedAndFiltersSince(t *testing.T) {
 	// A reopened store is what a restarted mock sees.
 	s.Close()
 
-	reopened, err := OpenStore(ctx, os.Getenv("BMKG_TEST_DATABASE_URL"))
+	reopened, err := OpenStore(ctx, os.Getenv("BMKG_TEST_DATABASE_URL"), defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -100,7 +100,7 @@ func TestIntegrationFiveWireShapesSurviveRestart(t *testing.T) {
 
 	s.Close()
 
-	reopened, err := OpenStore(ctx, os.Getenv("PVMBG_TEST_DATABASE_URL"))
+	reopened, err := OpenStore(ctx, os.Getenv("PVMBG_TEST_DATABASE_URL"), defaultDBPoolSize, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

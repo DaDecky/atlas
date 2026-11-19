@@ -74,7 +74,7 @@ func TestIntegrationSchemaParkingPolicyRecoveryAndRestart(t *testing.T) {
 		}
 	}
 	// A process restart reloads PostgreSQL, rather than an in-memory quarantine.
-	reopened, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4)
+	reopened, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestIntegrationBMKGBoundaryAndSchemaParkingSurviveRestart(t *testing.T) {
 		}
 	}
 
-	reopened, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4)
+	reopened, err := OpenStore(ctx, os.Getenv("TEST_DATABASE_URL"), 2, 4, defaultDBConnectTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

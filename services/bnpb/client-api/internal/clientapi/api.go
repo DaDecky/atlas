@@ -216,8 +216,8 @@ func (a *API) validateCurrent(ctx context.Context, claims AccessClaims, id strin
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
-	if err != nil || len(raw) > 4096 {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, int64(a.Config.MaxValidateBytes)+1))
+	if err != nil || len(raw) > a.Config.MaxValidateBytes {
 		return http.StatusServiceUnavailable, "auth_invalid_response"
 	}
 
@@ -378,13 +378,13 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 	return json.Marshal(out)
 }
 
-func retryAfter(raw string) string {
-	if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 && seconds <= 3600 {
+func retryAfter(raw string, max time.Duration) string {
+	if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 && time.Duration(seconds)*time.Second <= max {
 		return strconv.Itoa(seconds)
 	}
 
 	now := time.Now()
-	if date, err := http.ParseTime(raw); err == nil && date.After(now) && date.Before(now.Add(time.Hour)) {
+	if date, err := http.ParseTime(raw); err == nil && date.After(now) && date.Before(now.Add(max)) {
 		return date.UTC().Format(http.TimeFormat)
 	}
 
@@ -446,16 +446,14 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		w.Header().Set("Retry-After", retryAfter(resp.Header.Get("Retry-After")))
+		w.Header().Set("Retry-After", retryAfter(resp.Header.Get("Retry-After"), a.Config.MaxRetryAfter))
 		writeError(w, http.StatusTooManyRequests, "capacity_exceeded")
 
 		return
 	}
 
-	const maxBody = 4 << 20
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
-	if err != nil || len(body) > maxBody {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(a.Config.MaxResponseBytes)+1))
+	if err != nil || len(body) > a.Config.MaxResponseBytes {
 		writeError(w, http.StatusBadGateway, "aggregator_invalid_response")
 		return
 	}
