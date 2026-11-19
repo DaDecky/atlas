@@ -2,14 +2,14 @@ package aggregator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
+
+	"atlas/services/bnpb/aggregator/internal/decode"
 )
 
 type IngestStore interface {
@@ -17,6 +17,7 @@ type IngestStore interface {
 	WarningEvents(context.Context, []string) ([]HazardEvent, error)
 	Save(context.Context, string, []HazardEvent, *time.Time, time.Time) ([]HazardEvent, error)
 	Failure(context.Context, string, time.Time) error
+	Park(context.Context, ParkedMessage) error
 }
 
 type Publication struct {
@@ -32,6 +33,7 @@ type Poller struct {
 	Store                       IngestStore
 	Pending                     chan<- Publication
 	Log                         *slog.Logger
+	PolicyFile                  string
 }
 
 const (
@@ -54,7 +56,7 @@ func pause(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (p *Poller) fetch(ctx context.Context, path string, since *time.Time, id string) ([]Object, error) {
+func (p *Poller) fetch(ctx context.Context, path string, since *time.Time, id string) ([]sourceRecord, error) {
 	for attempt := 0; attempt <= p.Retries; attempt++ {
 		if attempt > 0 && !pause(ctx, p.Backoff*time.Duration(1<<(attempt-1))) {
 			return nil, ctx.Err()
@@ -82,7 +84,7 @@ func (p *Poller) fetch(ctx context.Context, path string, since *time.Time, id st
 }
 
 func (p *Poller) fetchOnce(ctx context.Context, path string, since *time.Time, id string) (
-	records []Object,
+	records []sourceRecord,
 	status int,
 	err error,
 ) {
@@ -145,21 +147,25 @@ func (p *Poller) fetchOnce(ctx context.Context, path string, since *time.Time, i
 		return nil, status, fmt.Errorf("source status %d", status)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxSourceBytes+1))
+	err = decode.Array(resp.Body, decode.Limits{BodyBytes: MaxSourceBytes, Records: MaxRecords}, func(record decode.Record) error {
+		if record.Code != "" {
+			p.reject(id, "", record.Code)
+			return p.park(ctx, path, id, record.Raw, record.Code, "record failed boundary validation", nil)
+		}
+
+		records = append(records, sourceRecord{Object: Object(record.Object), Raw: record.Raw})
+
+		return nil
+	})
 	if err != nil {
-		return nil, status, errors.New("source read failure")
-	}
+		var issue *decode.BodyError
+		if !errors.As(err, &issue) {
+			return nil, status, err
+		}
 
-	if len(data) > MaxSourceBytes {
-		return nil, status, errors.New("source body bound exceeded")
-	}
-
-	if err = json.Unmarshal(data, &records); err != nil || records == nil {
-		return nil, status, errors.New("invalid source array")
-	}
-
-	if len(records) > MaxRecords {
-		return nil, status, errors.New("source record bound exceeded")
+		if err = p.park(ctx, path, id, issue.Raw, issue.Code, "source body failed boundary validation", issue); err != nil {
+			return nil, status, err
+		}
 	}
 
 	return records, status, nil
@@ -185,7 +191,9 @@ func (p *Poller) fetchWarnings(ctx context.Context, checkpoint *time.Time, id st
 	warnings := []Warning{}
 	seen := map[string]bool{}
 
-	for _, o := range raw {
+	for _, record := range raw {
+		o := record.Object
+
 		ref, w, err := mapWarning(o)
 		if err == nil && seen[ref] {
 			err = errors.New("duplicate warning ID")
@@ -193,6 +201,13 @@ func (p *Poller) fetchWarnings(ctx context.Context, checkpoint *time.Time, id st
 
 		if err != nil {
 			p.reject(id, ref, err.Error())
+
+			if !seen[ref] {
+				if parkErr := p.park(ctx, "/tsunami-warnings", id, record.Raw, "schema_violation", err.Error(), nil); parkErr != nil {
+					return nil, parkErr
+				}
+			}
+
 			continue
 		}
 
@@ -205,6 +220,17 @@ func (p *Poller) fetchWarnings(ctx context.Context, checkpoint *time.Time, id st
 }
 
 func (p *Poller) Poll(ctx context.Context, id string) error {
+	var policy SchemaPolicy
+
+	if p.Source == "PVMBG" {
+		var err error
+
+		policy, err = ReadSchemaPolicy(p.PolicyFile)
+		if err != nil {
+			return err
+		}
+	}
+
 	start := time.Now()
 	checkpoint, err := p.Store.Checkpoint(ctx, p.Source)
 	logDatabaseCall(p.Log, id, "checkpoint", start, err)
@@ -234,7 +260,8 @@ func (p *Poller) Poll(ctx context.Context, id string) error {
 	events := []HazardEvent{}
 	seen := map[string]bool{}
 
-	for _, o := range raw {
+	for _, record := range raw {
+		o := record.Object
 		// Rejected records still advance the checkpoint, so one bad record cannot stall the source.
 		if t, err := timestamp(o, timeField); err == nil && (checkpoint == nil || t.After(*checkpoint)) {
 			checkpoint = &t
@@ -244,16 +271,21 @@ func (p *Poller) Poll(ctx context.Context, id string) error {
 		if p.Source == "BMKG" {
 			h, err = MapSeismic(o, warnings, now)
 		} else {
-			h, err = MapVolcanic(o, now)
+			h, err = policy.MapVolcanic(o, now)
 		}
 
 		if err == nil && seen[h.SourceRefID] {
-			err = errors.New("duplicate source ID")
+			p.reject(id, h.SourceRefID, "duplicate source ID")
+			continue
 		}
 
 		if err != nil {
 			ref, _ := textField(o, idField)
 			p.reject(id, ref, err.Error())
+
+			if parkErr := p.park(ctx, path, id, record.Raw, "schema_violation", err.Error(), nil); parkErr != nil {
+				return parkErr
+			}
 
 			continue
 		}

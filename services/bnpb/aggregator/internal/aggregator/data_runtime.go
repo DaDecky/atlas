@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"atlas/services/bnpb/aggregator/internal/placement"
@@ -30,6 +31,19 @@ type EpochIngest struct {
 	Data        ShardStore
 	Source      string
 	WriterEpoch int64
+}
+
+func (e *EpochIngest) Park(ctx context.Context, message ParkedMessage) error {
+	if message.Source != e.Source {
+		return errors.New("parking writer is bound to another source")
+	}
+
+	parking, ok := e.Data.(Parking)
+	if !ok {
+		return errors.New("parking unavailable")
+	}
+
+	return parking.Park(ctx, message)
 }
 
 // OpenClusterConfig reads mounted configuration containing node DSNs and API
@@ -79,6 +93,12 @@ func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
 
 		node, err := OpenDataNode(ctx, entry.Name, entry.URL)
 		if err != nil {
+			var schemaError *pgconn.PgError
+			if errors.As(err, &schemaError) {
+				c.Close()
+				return nil, fmt.Errorf("data node %s initialization failed: %w", entry.Name, err)
+			}
+
 			node, err = offlineDataNode(entry.Name, entry.URL)
 			if err != nil {
 				c.Close()

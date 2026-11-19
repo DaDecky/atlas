@@ -25,6 +25,16 @@ type memoryStore struct {
 	failures       map[string]int
 	failSave       bool
 	warningLookups [][]string
+	parked         []ParkedMessage
+}
+
+func (s *memoryStore) Park(_ context.Context, message ParkedMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.parked = append(s.parked, message)
+
+	return nil
 }
 
 func newMemoryStore() *memoryStore {
@@ -286,8 +296,13 @@ func TestSourceBoundsRetriesAndCancellation(t *testing.T) {
 			// The server answers at once, so a slow machine must not turn this into a timeout and a retry.
 			p.Timeout = time.Second
 
-			if _, err := p.fetch(context.Background(), "/volcanic-reports", nil, "id"); err == nil {
-				t.Fatal("accepted failure")
+			_, err := p.fetch(context.Background(), "/volcanic-reports", nil, "id")
+			if tc.status != 200 && err == nil || tc.status == 200 && err != nil {
+				t.Fatalf("unexpected boundary result: %v", err)
+			}
+
+			if tc.status == 200 && len(p.Store.(*memoryStore).parked) != 1 {
+				t.Fatal("invalid body was not retained")
 			}
 
 			if int(calls.Load()) != tc.attempts {
