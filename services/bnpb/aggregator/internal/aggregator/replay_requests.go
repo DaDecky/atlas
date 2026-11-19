@@ -35,26 +35,11 @@ func (r ReplayRequest) valid() bool {
 }
 
 func (r ReplayRequests) channel(ctx context.Context, source string, run func(*amqp.Channel, net.Conn, string) error) error {
-	var socket net.Conn
-
-	conn, err := amqp.DialConfig(r.URL, amqp.Config{Heartbeat: r.Heartbeat, Dial: func(network, address string) (net.Conn, error) {
-		var dialErr error
-
-		socket, dialErr = (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, network, address)
-		if dialErr == nil {
-			_ = socket.SetDeadline(time.Now().Add(2 * time.Second))
-		}
-
-		return socket, dialErr
-	}})
-
-	if socket != nil {
-		defer socket.Close()
-	}
-
+	conn, socket, err := dialBroker(ctx, r.URL, r.Heartbeat, 2*time.Second)
 	if err != nil {
 		return errors.New("replay broker unavailable")
 	}
+	defer socket.Close()
 
 	stop := context.AfterFunc(ctx, func() { _ = socket.Close() })
 	defer stop()

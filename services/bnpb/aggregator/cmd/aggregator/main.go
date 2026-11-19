@@ -66,7 +66,7 @@ func run(log *slog.Logger) error {
 	launch(func(ctx context.Context) {
 		aggregator.RunRelay(ctx, store, &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout, Heartbeat: c.BrokerHeartbeat, Log: log}, 200*time.Millisecond, func(err error) { log.Error("outbox_relay_failed", "reason", err.Error()) })
 	})
-	launch((&aggregator.FieldReportsConsumer{URL: c.RabbitMQURL, Store: store, Log: log}).Run)
+	launch((&aggregator.FieldReportsConsumer{URL: c.RabbitMQURL, Heartbeat: c.BrokerHeartbeat, Store: store, Log: log}).Run)
 
 	replay, err := startSources(ctx, store, c, launch, log)
 	if err != nil {

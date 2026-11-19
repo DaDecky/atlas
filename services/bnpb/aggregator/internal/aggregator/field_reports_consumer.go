@@ -4,16 +4,16 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type FieldReportsConsumer struct {
-	URL   string
-	Store FieldReportStore
-	Log   *slog.Logger
+	URL       string
+	Heartbeat time.Duration
+	Store     FieldReportStore
+	Log       *slog.Logger
 }
 
 const FieldReportsQueue = "field.reports"
@@ -35,27 +35,11 @@ func (c *FieldReportsConsumer) Process(ctx context.Context, delivery amqp.Delive
 }
 
 func (c *FieldReportsConsumer) session(ctx context.Context) error {
-	var socket net.Conn
-
-	conn, err := amqp.DialConfig(c.URL, amqp.Config{Heartbeat: 10 * time.Second, Dial: func(network, address string) (net.Conn, error) {
-		var dialErr error
-
-		socket, dialErr = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, address)
-		if dialErr == nil {
-			_ = socket.SetDeadline(time.Now().Add(5 * time.Second))
-		}
-
-		return socket, dialErr
-	}})
-
-	if socket != nil {
-		defer socket.Close()
-	}
-
+	conn, socket, err := dialBroker(ctx, c.URL, c.Heartbeat, 5*time.Second)
 	if err != nil {
 		return errors.New("report broker unavailable")
 	}
-
+	defer socket.Close()
 	defer conn.Close()
 
 	stop := context.AfterFunc(ctx, func() { _ = socket.Close() })

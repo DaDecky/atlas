@@ -48,28 +48,12 @@ func (p *RabbitPublisher) connect(ctx context.Context) error {
 
 	p.Close()
 
-	deadline, _ := ctx.Deadline()
-
-	dial := func(network, address string) (net.Conn, error) {
-		d := net.Dialer{Timeout: p.Timeout}
-
-		s, err := d.DialContext(ctx, network, address)
-		if err != nil {
-			return nil, err
-		}
-
-		p.socket = s
-		_ = s.SetDeadline(deadline)
-
-		return s, nil
-	}
-
-	conn, err := amqp.DialConfig(p.URL, amqp.Config{Heartbeat: p.Heartbeat, Dial: dial})
+	conn, socket, err := dialBroker(ctx, p.URL, p.Heartbeat, p.Timeout)
 	if err != nil {
-		p.Close()
 		return errors.New("broker connection failed")
 	}
 
+	p.socket = socket
 	p.conn = conn
 
 	ch, err := conn.Channel()
