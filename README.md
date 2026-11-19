@@ -2,11 +2,6 @@
 
 Disaster coordination services for BMKG, PVMBG, and BNPB. M1 runs each component in its own container. Auth owns its session database, the Aggregator owns the canonical store, and clients retrieve hazard data through the Client API.
 
-The [M2 ShardStore contract v1](docs/M2/shard-store.md)
-and [B1–B13 data implementation guide](docs/M2/data-work.md) cover local
-verification (`make integration`, `make data-integration`), cluster handoff,
-Audit/analytics, the dataset tool, and the remaining demo evidence.
-
 ## Run
 
 Install Docker with Compose, Go 1.27.4, GNU Make, Bash, and OpenSSL. On Windows, use WSL or Git Bash. Create `.env` with fresh secrets and a new Ed25519 signing pair.
@@ -268,6 +263,8 @@ make demo P=P5
 The suite needs Docker and Go, and it runs on Linux, macOS, and Windows. P3.3 waits for a real 60-second token expiry, so a full run takes about 10 minutes.
 
 ## Compose networks
+
+Each network admits only the services that need it. The table lists the members and the purpose of each.
 
 | Network | Members | Purpose |
 |---|---|---|

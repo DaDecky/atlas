@@ -1,8 +1,0 @@
-build ./consumers/consumer-a/go.mod
-build ./consumers/consumer-b/go.mod
-build ./demo/go.mod
-build ./services/bmkg/go.mod
-build ./services/bnpb/aggregator/go.mod
-build ./services/bnpb/auth/go.mod
-build ./services/bnpb/client-api/go.mod
-build ./services/pvmbg/go.mod
