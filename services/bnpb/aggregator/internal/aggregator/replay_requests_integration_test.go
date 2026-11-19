@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -17,7 +19,7 @@ import (
 func TestIntegrationReplayRequestSurvivesHolderReplacement(t *testing.T) {
 	url := os.Getenv("TEST_RABBITMQ_URL")
 	if url == "" {
-		t.Skip("run make integration")
+		t.Fatal("run make integration")
 	}
 
 	store := integrationStore(t)

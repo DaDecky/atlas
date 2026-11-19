@@ -1,3 +1,5 @@
+//go:build integration
+
 package consumer
 
 import (
@@ -17,7 +19,7 @@ import (
 func TestIntegrationExistingQueueKeepsBacklog(t *testing.T) {
 	url := os.Getenv("CONSUMER_TEST_AMQP_URL")
 	if url == "" {
-		t.Skip("CONSUMER_TEST_AMQP_URL is not set")
+		t.Fatal("CONSUMER_TEST_AMQP_URL is not set")
 	}
 
 	for _, tc := range []struct {

@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -55,7 +57,7 @@ func dataCluster(t *testing.T) *Cluster {
 	for i, name := range []string{"a", "b", "c"} {
 		url := os.Getenv([]string{"DATA_TEST_A", "DATA_TEST_B", "DATA_TEST_C"}[i])
 		if url == "" {
-			t.Skip("run make data-integration")
+			t.Fatal("run make data-integration")
 		}
 
 		node, err := OpenDataNode(ctx, name, url, DefaultClusterLimits())
@@ -420,7 +422,7 @@ func TestDataIntegrationNewNodeJoinsWithoutStoppingReads(t *testing.T) {
 
 	url := os.Getenv("DATA_TEST_D")
 	if url == "" {
-		t.Skip("fourth local database required")
+		t.Fatal("fourth local database required")
 	}
 
 	node, err := OpenDataNode(ctx, "d", url, DefaultClusterLimits())

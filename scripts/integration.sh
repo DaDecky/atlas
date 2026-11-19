@@ -37,6 +37,9 @@ modules=(
   consumers/notifier
 )
 
+# The tests of the replicated store need three stores, so make data-integration runs them.
+data_tests=$(cat scripts/data-tests.regex)
+
 for module in "${modules[@]}"; do
-  (cd "$module" && go test -race -count=1 -timeout=5m -run Integration -v ./internal/...)
+  (cd "$module" && go test -race -count=1 -timeout=5m -tags=integration -run Integration -skip "$data_tests" -v ./internal/...)
 done

@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -56,7 +58,7 @@ func TestIntegrationSavePublishProcessCrash(t *testing.T) {
 
 	broker := os.Getenv("TEST_RABBITMQ_URL")
 	if broker == "" {
-		t.Skip("run make integration with PostgreSQL and RabbitMQ")
+		t.Fatal("run make integration with PostgreSQL and RabbitMQ")
 	}
 
 	s := integrationStore(t)

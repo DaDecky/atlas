@@ -1,3 +1,5 @@
+//go:build integration
+
 package consumer
 
 import (
@@ -35,7 +37,7 @@ func (h duplicateHandler) WithGroup(string) slog.Handler { return h }
 func TestIntegrationRedeliveryAfterPersistBeforeAck(t *testing.T) {
 	url := os.Getenv("CONSUMER_TEST_AMQP_URL")
 	if url == "" {
-		t.Skip("CONSUMER_TEST_AMQP_URL is not set")
+		t.Fatal("CONSUMER_TEST_AMQP_URL is not set")
 	}
 
 	conn, err := amqp.Dial(url)
@@ -159,7 +161,7 @@ func TestIntegrationRedeliveryAfterPersistBeforeAck(t *testing.T) {
 func TestIntegrationQueueBoundsAndRetention(t *testing.T) {
 	url := os.Getenv("CONSUMER_TEST_AMQP_URL")
 	if url == "" {
-		t.Skip("CONSUMER_TEST_AMQP_URL is not set")
+		t.Fatal("CONSUMER_TEST_AMQP_URL is not set")
 	}
 
 	conn, err := amqp.Dial(url)

@@ -1,3 +1,5 @@
+//go:build integration
+
 package auth
 
 import (
@@ -17,7 +19,7 @@ import (
 func TestIntegrationConcurrentAuthReplicasInitializeFreshSchema(t *testing.T) {
 	database := os.Getenv("AUTH_TEST_DATABASE_URL")
 	if database == "" {
-		t.Skip("AUTH_TEST_DATABASE_URL is not set")
+		t.Fatal("AUTH_TEST_DATABASE_URL is not set")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -92,7 +94,7 @@ func TestIntegrationConcurrentAuthReplicasInitializeFreshSchema(t *testing.T) {
 func TestIntegrationSessionSurvivesAuthStoreRestart(t *testing.T) {
 	url := os.Getenv("AUTH_TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("AUTH_TEST_DATABASE_URL is not set")
+		t.Fatal("AUTH_TEST_DATABASE_URL is not set")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -156,7 +158,7 @@ func TestIntegrationSessionSurvivesAuthStoreRestart(t *testing.T) {
 func TestIntegrationConcurrentRefreshRevocationAndExpiry(t *testing.T) {
 	url := os.Getenv("AUTH_TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("AUTH_TEST_DATABASE_URL is not set")
+		t.Fatal("AUTH_TEST_DATABASE_URL is not set")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

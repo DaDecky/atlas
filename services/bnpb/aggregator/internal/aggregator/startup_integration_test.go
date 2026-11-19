@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -17,7 +19,7 @@ import (
 func TestDataIntegrationConcurrentFreshNodeInitialization(t *testing.T) {
 	databaseURL := os.Getenv("DATA_TEST_D")
 	if databaseURL == "" {
-		t.Skip("run make data-integration")
+		t.Fatal("run make data-integration")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -25,7 +27,7 @@ func TestDataIntegrationConcurrentFreshNodeInitialization(t *testing.T) {
 
 	adminURL := os.Getenv("DATA_TEST_ADMIN_D")
 	if adminURL == "" {
-		t.Skip("run make data-integration with its disposable admin connection")
+		t.Fatal("run make data-integration with its disposable admin connection")
 	}
 
 	admin, err := pgx.Connect(ctx, adminURL)

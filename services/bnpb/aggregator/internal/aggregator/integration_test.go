@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -23,7 +25,7 @@ func integrationStore(t *testing.T) *Store {
 
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("set TEST_DATABASE_URL or run make integration")
+		t.Fatal("set TEST_DATABASE_URL or run make integration")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -427,7 +429,7 @@ func TestIntegrationLivePollingMappingFreshnessAndReads(t *testing.T) {
 func TestIntegrationRabbitFanoutConfirmAndReconnect(t *testing.T) {
 	broker := os.Getenv("TEST_RABBITMQ_URL")
 	if broker == "" {
-		t.Skip("set TEST_RABBITMQ_URL or run make integration")
+		t.Fatal("set TEST_RABBITMQ_URL or run make integration")
 	}
 
 	conn, err := amqp.Dial(broker)

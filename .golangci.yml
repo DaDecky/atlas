@@ -1,7 +1,7 @@
 version: "2"
 
 run:
-  build-tags: [demo]
+  build-tags: [demo, integration]
 
 linters:
   enable:
