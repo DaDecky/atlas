@@ -25,14 +25,14 @@ var schema string
 
 var ErrInvalidRefresh = errors.New("invalid refresh token")
 
-func OpenStore(ctx context.Context, databaseURL string) (*Store, error) {
+func OpenStore(ctx context.Context, databaseURL string, poolSize int32, connectTimeout time.Duration) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, errors.New("invalid auth database URL")
 	}
 
-	cfg.MaxConns = 8
-	cfg.ConnConfig.ConnectTimeout = 2 * time.Second
+	cfg.MaxConns = poolSize
+	cfg.ConnConfig.ConnectTimeout = connectTimeout
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

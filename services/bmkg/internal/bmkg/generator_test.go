@@ -84,7 +84,7 @@ func TestRunGeneratorAddsEventsUntilCancelled(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		RunGenerator(ctx, store, NewGenerator(Seed, time.Now()), 5*time.Millisecond, testLog())
+		RunGenerator(ctx, store, NewGenerator(Seed, time.Now()), 5*time.Millisecond, defaultStoreTimeout, testLog())
 		close(done)
 	}()
 

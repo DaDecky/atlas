@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -22,12 +23,28 @@ type Config struct {
 	PrivateKey                                            ed25519.PrivateKey
 	Clients                                               []ClientCredential
 	AccessTTL, RefreshTTL                                 time.Duration
+
+	HTTPReadHeaderTimeout, HTTPReadTimeout, HTTPWriteTimeout, HTTPIdleTimeout time.Duration
+	StartupTimeout, ShutdownTimeout, DBConnectTimeout, StoreTimeout           time.Duration
+	HTTPMaxHeaderBytes, DBPoolSize, MaxBodyBytes                              int
 }
 
 const (
 	defaultAddress    = ":8084"
 	defaultAccessTTL  = 60 * time.Second
 	defaultRefreshTTL = 7 * 24 * time.Hour
+
+	defaultHTTPReadHeaderTimeout = 3 * time.Second
+	defaultHTTPReadTimeout       = 5 * time.Second
+	defaultHTTPWriteTimeout      = 5 * time.Second
+	defaultHTTPIdleTimeout       = 30 * time.Second
+	defaultHTTPMaxHeaderBytes    = 16 << 10
+	defaultStartupTimeout        = 15 * time.Second
+	defaultShutdownTimeout       = 5 * time.Second
+	defaultDBConnectTimeout      = 2 * time.Second
+	defaultDBPoolSize            = 8
+	defaultStoreTimeout          = 2 * time.Second
+	defaultMaxBodyBytes          = 8192
 )
 
 func decodeBase64(raw string) ([]byte, error) {
@@ -62,18 +79,32 @@ func parsePrivateKey(raw string) (ed25519.PrivateKey, error) {
 	return key, nil
 }
 
-func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
+func durationEnv(name string, fallback, min, max time.Duration) (time.Duration, error) {
 	raw := os.Getenv(name)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	d, err := time.ParseDuration(raw)
-	if err != nil || d < time.Second || d > 365*24*time.Hour {
+	if err != nil || d < min || d > max {
 		return 0, fmt.Errorf("invalid %s", name)
 	}
 
 	return d, nil
+}
+
+func intEnv(name string, fallback, min, max int) (int, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback, nil
+	}
+
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < min || n > max {
+		return 0, fmt.Errorf("invalid %s", name)
+	}
+
+	return n, nil
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -98,14 +129,41 @@ func ConfigFromEnv() (Config, error) {
 		c.Address = defaultAddress
 	}
 
-	c.AccessTTL, err = durationEnv("ACCESS_TOKEN_TTL", defaultAccessTTL)
-	if err != nil {
-		return c, err
+	durations := []struct {
+		key                string
+		fallback, min, max time.Duration
+		dest               *time.Duration
+	}{
+		{"ACCESS_TOKEN_TTL", defaultAccessTTL, time.Second, 365 * 24 * time.Hour, &c.AccessTTL},
+		{"REFRESH_TOKEN_TTL", defaultRefreshTTL, time.Second, 365 * 24 * time.Hour, &c.RefreshTTL},
+		{"HTTP_READ_HEADER_TIMEOUT", defaultHTTPReadHeaderTimeout, 100 * time.Millisecond, time.Minute, &c.HTTPReadHeaderTimeout},
+		{"HTTP_READ_TIMEOUT", defaultHTTPReadTimeout, 100 * time.Millisecond, 5 * time.Minute, &c.HTTPReadTimeout},
+		{"HTTP_WRITE_TIMEOUT", defaultHTTPWriteTimeout, 100 * time.Millisecond, 5 * time.Minute, &c.HTTPWriteTimeout},
+		{"HTTP_IDLE_TIMEOUT", defaultHTTPIdleTimeout, time.Second, 10 * time.Minute, &c.HTTPIdleTimeout},
+		{"STARTUP_TIMEOUT", defaultStartupTimeout, time.Second, 10 * time.Minute, &c.StartupTimeout},
+		{"SHUTDOWN_TIMEOUT", defaultShutdownTimeout, time.Second, 2 * time.Minute, &c.ShutdownTimeout},
+		{"DB_CONNECT_TIMEOUT", defaultDBConnectTimeout, 100 * time.Millisecond, time.Minute, &c.DBConnectTimeout},
+		{"STORE_TIMEOUT", defaultStoreTimeout, 100 * time.Millisecond, time.Minute, &c.StoreTimeout},
+	}
+	for _, d := range durations {
+		if *d.dest, err = durationEnv(d.key, d.fallback, d.min, d.max); err != nil {
+			return c, err
+		}
 	}
 
-	c.RefreshTTL, err = durationEnv("REFRESH_TOKEN_TTL", defaultRefreshTTL)
-	if err != nil {
-		return c, err
+	ints := []struct {
+		key                string
+		fallback, min, max int
+		dest               *int
+	}{
+		{"HTTP_MAX_HEADER_BYTES", defaultHTTPMaxHeaderBytes, 1 << 10, 1 << 20, &c.HTTPMaxHeaderBytes},
+		{"DB_POOL_SIZE", defaultDBPoolSize, 1, 64, &c.DBPoolSize},
+		{"AUTH_MAX_BODY_BYTES", defaultMaxBodyBytes, 512, 1 << 20, &c.MaxBodyBytes},
+	}
+	for _, d := range ints {
+		if *d.dest, err = intEnv(d.key, d.fallback, d.min, d.max); err != nil {
+			return c, err
+		}
 	}
 
 	c.Clients = []ClientCredential{

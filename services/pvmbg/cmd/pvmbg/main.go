@@ -22,11 +22,11 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	startup, stop := context.WithTimeout(ctx, 15*time.Second)
+	startup, stop := context.WithTimeout(ctx, cfg.StartupTimeout)
 
-	store, err := pvmbg.OpenStore(startup, cfg.DatabaseURL)
+	store, err := pvmbg.OpenStore(startup, cfg.DatabaseURL, int32(cfg.DBPoolSize), cfg.DBConnectTimeout)
 	if err == nil {
-		err = pvmbg.LoadSeed(startup, store)
+		err = pvmbg.LoadSeed(startup, store, cfg.MinSeedRecords)
 	}
 
 	version := 1
@@ -43,24 +43,24 @@ func run(log *slog.Logger) error {
 	defer store.Close()
 
 	controls := pvmbg.NewControls(version)
-	go pvmbg.RunGenerator(ctx, store, controls, pvmbg.NewGenerator(pvmbg.Seed, time.Now()), cfg.EventInterval, log)
+	go pvmbg.RunGenerator(ctx, store, controls, pvmbg.NewGenerator(cfg.Seed, time.Now()), cfg.EventInterval, cfg.StoreTimeout, log)
 
 	api := &pvmbg.API{
 		Store:    store,
 		Controls: controls,
 		Token:    cfg.Token,
 		Delay:    cfg.RandomDelay(),
-		MaxHang:  pvmbg.DefaultMaxHang,
+		MaxHang:  cfg.MaxHang,
 		Log:      log,
 	}
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           api.Handler(),
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
 		WriteTimeout:      cfg.MaxDelay + 5*time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
+		MaxHeaderBytes:    cfg.HTTPMaxHeaderBytes,
 	}
 
 	done := make(chan error, 1)
@@ -82,7 +82,7 @@ func run(log *slog.Logger) error {
 		}
 	}
 
-	shutdown, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdown, finish := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer finish()
 
 	_ = server.Shutdown(shutdown)

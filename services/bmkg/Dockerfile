@@ -10,5 +10,5 @@ RUN adduser -D -u 10001 atlas
 COPY --from=build /bmkg /usr/local/bin/bmkg
 USER atlas
 EXPOSE 8081
-HEALTHCHECK --interval=10s --timeout=3s CMD wget -q -O /dev/null http://127.0.0.1:8081/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/health"]
 ENTRYPOINT ["bmkg"]

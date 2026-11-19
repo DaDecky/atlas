@@ -1,3 +1,28 @@
+# Tunables read by the services. An empty value keeps the default that is set in the code.
+x-http: &http
+  HTTP_READ_HEADER_TIMEOUT: ${HTTP_READ_HEADER_TIMEOUT:-}
+  HTTP_READ_TIMEOUT: ${HTTP_READ_TIMEOUT:-}
+  HTTP_WRITE_TIMEOUT: ${HTTP_WRITE_TIMEOUT:-}
+  HTTP_IDLE_TIMEOUT: ${HTTP_IDLE_TIMEOUT:-}
+  HTTP_MAX_HEADER_BYTES: ${HTTP_MAX_HEADER_BYTES:-}
+  SHUTDOWN_TIMEOUT: ${SHUTDOWN_TIMEOUT:-}
+
+x-db: &db
+  STARTUP_TIMEOUT: ${STARTUP_TIMEOUT:-}
+  DB_CONNECT_TIMEOUT: ${DB_CONNECT_TIMEOUT:-}
+  DB_POOL_SIZE: ${DB_POOL_SIZE:-}
+  STORE_TIMEOUT: ${STORE_TIMEOUT:-}
+
+x-broker: &broker
+  BROKER_HEARTBEAT: ${BROKER_HEARTBEAT:-}
+  BROKER_DIAL_TIMEOUT: ${BROKER_DIAL_TIMEOUT:-}
+  BROKER_RECONNECT_DELAY: ${BROKER_RECONNECT_DELAY:-}
+
+x-mock: &mock
+  EVENT_INTERVAL_CEILING: ${EVENT_INTERVAL_CEILING:-}
+  MIN_SEED_RECORDS: ${MIN_SEED_RECORDS:-}
+  SEED: ${SEED:-}
+
 services:
   postgres:
     image: postgres:18.3-alpine
@@ -54,6 +79,10 @@ services:
       DATABASE_URL: postgres://bmkg:${BMKG_DB_PASSWORD}@bmkg-db:5432/bmkg?sslmode=disable
       BMKG_API_KEY: ${BMKG_API_KEY:?run make env}
       EVENT_INTERVAL: ${SOURCE_EVENT_INTERVAL:-}
+      RESPONSE_DELAY: ${BMKG_RESPONSE_DELAY:-}
+      RESPONSE_DELAY_FLOOR: ${BMKG_RESPONSE_DELAY_FLOOR:-}
+      RESPONSE_DELAY_CEILING: ${BMKG_RESPONSE_DELAY_CEILING:-}
+      <<: [*http, *db, *mock]
     ports: ['127.0.0.1:${BMKG_PORT:-8081}:8081']
     networks: [sources, bmkg-store]
     depends_on:
@@ -83,6 +112,10 @@ services:
       MIN_RESPONSE_DELAY: ${PVMBG_MIN_RESPONSE_DELAY:-}
       MAX_RESPONSE_DELAY: ${PVMBG_MAX_RESPONSE_DELAY:-}
       EVENT_INTERVAL: ${SOURCE_EVENT_INTERVAL:-}
+      OUTAGE_MAX_HANG: ${OUTAGE_MAX_HANG:-}
+      RESPONSE_DELAY_FLOOR: ${PVMBG_RESPONSE_DELAY_FLOOR:-}
+      RESPONSE_DELAY_CEILING: ${PVMBG_RESPONSE_DELAY_CEILING:-}
+      <<: [*http, *db, *mock]
     ports: ['127.0.0.1:${PVMBG_PORT:-8082}:8082']
     networks: [sources, pvmbg-store]
     depends_on:
@@ -99,7 +132,24 @@ services:
       BMKG_API_KEY: ${BMKG_API_KEY:?run make env}
       PVMBG_TOKEN: ${PVMBG_TOKEN:?run make env}
       AGGREGATOR_INTERNAL_TOKEN: ${AGGREGATOR_INTERNAL_TOKEN:?run make env}
+      AUDIT_TOKEN: ${AUDIT_TOKEN:?run make env}
       POLL_INTERVAL: ${POLL_INTERVAL:-}
+      SOURCE_TIMEOUT: ${SOURCE_TIMEOUT:-}
+      SOURCE_RETRIES: ${SOURCE_RETRIES:-}
+      RETRY_BACKOFF: ${RETRY_BACKOFF:-}
+      QUERY_TIMEOUT: ${QUERY_TIMEOUT:-}
+      QUERY_CAPACITY: ${QUERY_CAPACITY:-}
+      QUERY_POOL_SIZE: ${QUERY_POOL_SIZE:-}
+      INGEST_POOL_SIZE: ${INGEST_POOL_SIZE:-}
+      PUBLISH_TIMEOUT: ${PUBLISH_TIMEOUT:-}
+      PUBLISH_RETRIES: ${PUBLISH_RETRIES:-}
+      PUBLISH_CAPACITY: ${PUBLISH_CAPACITY:-}
+      SOURCE_IDLE_CONN_TIMEOUT: ${SOURCE_IDLE_CONN_TIMEOUT:-}
+      FAILURE_MARK_TIMEOUT: ${FAILURE_MARK_TIMEOUT:-}
+      WARNING_LOOKBACK: ${WARNING_LOOKBACK:-}
+      MAX_SOURCE_RECORDS: ${MAX_SOURCE_RECORDS:-}
+      MAX_SOURCE_BYTES: ${MAX_SOURCE_BYTES:-}
+      <<: [*http, *db, *broker]
     networks: [sources, internal-api, canonical, events]
     depends_on:
       postgres: {condition: service_healthy}
@@ -119,6 +169,9 @@ services:
       INTERNAL_OPS_CLIENT_ID: ${INTERNAL_OPS_CLIENT_ID:?run make env}
       INTERNAL_OPS_CLIENT_SECRET: ${INTERNAL_OPS_CLIENT_SECRET:?run make env}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-}
+      AUTH_MAX_BODY_BYTES: ${AUTH_MAX_BODY_BYTES:-}
+      <<: [*http, *db]
     ports: ['127.0.0.1:${AUTH_PORT:-8084}:8084']
     networks: [auth-api, auth-store]
     depends_on:
@@ -133,6 +186,12 @@ services:
       AGGREGATOR_INTERNAL_TOKEN: ${AGGREGATOR_INTERNAL_TOKEN:?run make env}
       AUTH_VALIDATE_TOKEN: ${AUTH_VALIDATE_TOKEN:?run make env}
       AUTH_ED25519_PUBLIC_KEY_B64: ${AUTH_ED25519_PUBLIC_KEY_B64:?run make env}
+      CLIENT_API_OUTBOUND_TIMEOUT: ${CLIENT_API_OUTBOUND_TIMEOUT:-}
+      CLIENT_API_REQUEST_CAPACITY: ${CLIENT_API_REQUEST_CAPACITY:-}
+      MAX_RETRY_AFTER: ${MAX_RETRY_AFTER:-}
+      AGGREGATOR_MAX_RESPONSE_BYTES: ${AGGREGATOR_MAX_RESPONSE_BYTES:-}
+      AUTH_VALIDATE_MAX_BYTES: ${AUTH_VALIDATE_MAX_BYTES:-}
+      <<: *http
     ports: ['127.0.0.1:${CLIENT_API_PORT:-8080}:8080']
     networks: [auth-api, internal-api]
     depends_on:
@@ -144,6 +203,11 @@ services:
     build: ./consumers/consumer-a
     environment:
       AMQP_URL: amqp://atlas:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      CONSUMER_PREFETCH: ${CONSUMER_PREFETCH:-}
+      CONSUMER_QUEUE_MAX_LENGTH: ${CONSUMER_QUEUE_MAX_LENGTH:-}
+      CONSUMER_QUEUE_MAX_BYTES: ${CONSUMER_QUEUE_MAX_BYTES:-}
+      CONSUMER_MESSAGE_TTL: ${CONSUMER_MESSAGE_TTL:-}
+      <<: [*http, *broker]
     volumes: [consumer-a-data:/data]
     networks: [events]
     depends_on:
@@ -154,6 +218,11 @@ services:
     build: ./consumers/consumer-b
     environment:
       AMQP_URL: amqp://atlas:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      CONSUMER_PREFETCH: ${CONSUMER_PREFETCH:-}
+      CONSUMER_QUEUE_MAX_LENGTH: ${CONSUMER_QUEUE_MAX_LENGTH:-}
+      CONSUMER_QUEUE_MAX_BYTES: ${CONSUMER_QUEUE_MAX_BYTES:-}
+      CONSUMER_MESSAGE_TTL: ${CONSUMER_MESSAGE_TTL:-}
+      <<: [*http, *broker]
     volumes: [consumer-b-data:/data]
     networks: [events]
     depends_on:
@@ -168,6 +237,11 @@ services:
       # The consumer-b image defaults to consumer-b, so only the name and queue change.
       CONSUMER_NAME: consumer-c
       CONSUMER_QUEUE: hazard.events.consumer-c
+      CONSUMER_PREFETCH: ${CONSUMER_PREFETCH:-}
+      CONSUMER_QUEUE_MAX_LENGTH: ${CONSUMER_QUEUE_MAX_LENGTH:-}
+      CONSUMER_QUEUE_MAX_BYTES: ${CONSUMER_QUEUE_MAX_BYTES:-}
+      CONSUMER_MESSAGE_TTL: ${CONSUMER_MESSAGE_TTL:-}
+      <<: [*http, *broker]
     volumes: [consumer-c-data:/data]
     networks: [events]
     depends_on:

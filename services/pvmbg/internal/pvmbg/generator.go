@@ -57,7 +57,7 @@ func RunGenerator(
 	store Store,
 	controls *Controls,
 	gen *Generator,
-	interval time.Duration,
+	interval, writeTimeout time.Duration,
 	log *slog.Logger,
 ) {
 	ticker := time.NewTicker(interval)
@@ -70,7 +70,7 @@ func RunGenerator(
 		case now := <-ticker.C:
 			report := gen.Next(now, controls.SchemaVersion())
 			id := newCorrelationID()
-			writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
 			start := time.Now()
 			err := store.Add(writeCtx, report)
 

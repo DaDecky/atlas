@@ -23,7 +23,7 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	startupTimeout := 15 * time.Second
+	startupTimeout := c.StartupTimeout
 	if os.Getenv("M2_DATA_CONFIG") != "" {
 		startupTimeout = 2 * time.Minute
 	}
@@ -91,7 +91,7 @@ func run(log *slog.Logger) error {
 		transport := &http.Transport{
 			MaxConnsPerHost:       1,
 			MaxIdleConnsPerHost:   1,
-			IdleConnTimeout:       30 * time.Second,
+			IdleConnTimeout:       c.SourceIdleConnTimeout,
 			ResponseHeaderTimeout: c.SourceTimeout,
 		}
 		defer transport.CloseIdleConnections()
@@ -108,10 +108,16 @@ func run(log *slog.Logger) error {
 			Timeout:    c.SourceTimeout,
 			Backoff:    c.Backoff,
 			Retries:    c.SourceRetries,
-			Client:     client,
-			Store:      ingest,
-			Pending:    pending,
-			Log:        log,
+
+			MaxRecords:         c.MaxSourceRecords,
+			MaxSourceBytes:     c.MaxSourceBytes,
+			WarningLookback:    c.WarningLookback,
+			FailureMarkTimeout: c.FailureMarkTimeout,
+
+			Client:  client,
+			Store:   ingest,
+			Pending: pending,
+			Log:     log,
 		}
 		launch(poller.Run)
 	}
@@ -126,11 +132,11 @@ func run(log *slog.Logger) error {
 	server := &http.Server{
 		Addr:              c.Address,
 		Handler:           dataHandler(api, store, c),
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: c.HTTPReadHeaderTimeout,
+		ReadTimeout:       c.HTTPReadTimeout,
 		WriteTimeout:      c.QueryTimeout + time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		IdleTimeout:       c.HTTPIdleTimeout,
+		MaxHeaderBytes:    c.HTTPMaxHeaderBytes,
 	}
 
 	done := make(chan error, 1)
@@ -148,7 +154,7 @@ func run(log *slog.Logger) error {
 		cancel()
 	}
 
-	shutdown, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdown, finish := context.WithTimeout(context.Background(), c.ShutdownTimeout)
 	defer finish()
 
 	_ = server.Shutdown(shutdown)

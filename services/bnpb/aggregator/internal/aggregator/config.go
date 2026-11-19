@@ -14,6 +14,11 @@ type Config struct {
 	PollInterval, SourceTimeout, Backoff, QueryTimeout, PublishTimeout                       time.Duration
 	SourceRetries, PublishRetries, QueryCapacity, PublishCapacity                            int
 	IngestPool, QueryPool                                                                    int32
+
+	HTTPReadHeaderTimeout, HTTPReadTimeout, HTTPIdleTimeout, StartupTimeout, ShutdownTimeout time.Duration
+	DBConnectTimeout, SourceIdleConnTimeout, FailureMarkTimeout, WarningLookback             time.Duration
+	BrokerHeartbeat                                                                          time.Duration
+	HTTPMaxHeaderBytes, MaxSourceRecords, MaxSourceBytes                                     int
 }
 
 const (
@@ -29,6 +34,20 @@ const (
 	defaultPublishCapacity = 256
 	defaultIngestPool      = 2
 	defaultQueryPool       = 8
+
+	defaultHTTPReadHeaderTimeout = 3 * time.Second
+	defaultHTTPReadTimeout       = 5 * time.Second
+	defaultHTTPIdleTimeout       = 30 * time.Second
+	defaultHTTPMaxHeaderBytes    = 16 << 10
+	defaultStartupTimeout        = 15 * time.Second
+	defaultShutdownTimeout       = 5 * time.Second
+	defaultDBConnectTimeout      = 2 * time.Second
+	defaultSourceIdleConnTimeout = 30 * time.Second
+	defaultFailureMarkTimeout    = 2 * time.Second
+	defaultWarningLookback       = time.Hour
+	defaultBrokerHeartbeat       = 10 * time.Second
+	defaultMaxSourceRecords      = 1000
+	defaultMaxSourceBytes        = 4 << 20
 )
 
 func ConfigFromEnv() (Config, error) {
@@ -78,18 +97,28 @@ func ConfigFromEnv() (Config, error) {
 	)
 
 	durations := []struct {
-		key      string
-		fallback time.Duration
-		dest     *time.Duration
+		key                string
+		fallback, min, max time.Duration
+		dest               *time.Duration
 	}{
-		{"POLL_INTERVAL", defaultPollInterval, &c.PollInterval},
-		{"SOURCE_TIMEOUT", defaultSourceTimeout, &c.SourceTimeout},
-		{"RETRY_BACKOFF", defaultRetryBackoff, &c.Backoff},
-		{"QUERY_TIMEOUT", defaultQueryTimeout, &c.QueryTimeout},
-		{"PUBLISH_TIMEOUT", defaultPublishTimeout, &c.PublishTimeout},
+		{"POLL_INTERVAL", defaultPollInterval, time.Millisecond, time.Minute, &c.PollInterval},
+		{"SOURCE_TIMEOUT", defaultSourceTimeout, time.Millisecond, time.Minute, &c.SourceTimeout},
+		{"RETRY_BACKOFF", defaultRetryBackoff, time.Millisecond, time.Minute, &c.Backoff},
+		{"QUERY_TIMEOUT", defaultQueryTimeout, time.Millisecond, time.Minute, &c.QueryTimeout},
+		{"PUBLISH_TIMEOUT", defaultPublishTimeout, time.Millisecond, time.Minute, &c.PublishTimeout},
+		{"HTTP_READ_HEADER_TIMEOUT", defaultHTTPReadHeaderTimeout, 100 * time.Millisecond, time.Minute, &c.HTTPReadHeaderTimeout},
+		{"HTTP_READ_TIMEOUT", defaultHTTPReadTimeout, 100 * time.Millisecond, 5 * time.Minute, &c.HTTPReadTimeout},
+		{"HTTP_IDLE_TIMEOUT", defaultHTTPIdleTimeout, time.Second, 10 * time.Minute, &c.HTTPIdleTimeout},
+		{"STARTUP_TIMEOUT", defaultStartupTimeout, time.Second, 10 * time.Minute, &c.StartupTimeout},
+		{"SHUTDOWN_TIMEOUT", defaultShutdownTimeout, time.Second, 2 * time.Minute, &c.ShutdownTimeout},
+		{"DB_CONNECT_TIMEOUT", defaultDBConnectTimeout, 100 * time.Millisecond, time.Minute, &c.DBConnectTimeout},
+		{"SOURCE_IDLE_CONN_TIMEOUT", defaultSourceIdleConnTimeout, time.Second, 10 * time.Minute, &c.SourceIdleConnTimeout},
+		{"FAILURE_MARK_TIMEOUT", defaultFailureMarkTimeout, 100 * time.Millisecond, time.Minute, &c.FailureMarkTimeout},
+		{"WARNING_LOOKBACK", defaultWarningLookback, time.Minute, 24 * time.Hour, &c.WarningLookback},
+		{"BROKER_HEARTBEAT", defaultBrokerHeartbeat, time.Second, 5 * time.Minute, &c.BrokerHeartbeat},
 	}
 	for _, d := range durations {
-		if *d.dest, err = envDuration(d.key, d.fallback); err != nil {
+		if *d.dest, err = envDuration(d.key, d.fallback, d.min, d.max); err != nil {
 			return c, err
 		}
 	}
@@ -105,6 +134,9 @@ func ConfigFromEnv() (Config, error) {
 		{"PUBLISH_CAPACITY", defaultPublishCapacity, 1, 10000, &c.PublishCapacity},
 		{"INGEST_POOL_SIZE", defaultIngestPool, 1, 64, &ingestPool},
 		{"QUERY_POOL_SIZE", defaultQueryPool, 1, 64, &queryPool},
+		{"HTTP_MAX_HEADER_BYTES", defaultHTTPMaxHeaderBytes, 1 << 10, 1 << 20, &c.HTTPMaxHeaderBytes},
+		{"MAX_SOURCE_RECORDS", defaultMaxSourceRecords, 1, 100000, &c.MaxSourceRecords},
+		{"MAX_SOURCE_BYTES", defaultMaxSourceBytes, 64 << 10, 64 << 20, &c.MaxSourceBytes},
 	}
 	for _, d := range ints {
 		if *d.dest, err = envInt(d.key, d.fallback, d.min, d.max); err != nil {
@@ -117,14 +149,14 @@ func ConfigFromEnv() (Config, error) {
 	return c, nil
 }
 
-func envDuration(key string, fallback time.Duration) (time.Duration, error) {
+func envDuration(key string, fallback, min, max time.Duration) (time.Duration, error) {
 	raw := os.Getenv(key)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 || d > time.Minute {
+	if err != nil || d < min || d > max {
 		return 0, fmt.Errorf("invalid %s", key)
 	}
 

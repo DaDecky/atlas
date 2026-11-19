@@ -32,12 +32,12 @@ type Cluster struct {
 var _ ShardStore = (*Cluster)(nil)
 
 func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
-	s, err := OpenStore(ctx, url, 4, 8)
+	s, err := OpenStore(ctx, url, 4, 8, defaultDBConnectTimeout)
 	if err != nil {
 		return nil, err
 	}
 
-	coordinator, err := openPool(ctx, url, 4)
+	coordinator, err := openPool(ctx, url, 4, defaultDBConnectTimeout)
 	if err != nil {
 		s.Close()
 		return nil, err
