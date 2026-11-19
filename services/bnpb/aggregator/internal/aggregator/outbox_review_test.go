@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type timeoutPublisher struct{}
+type timeoutPublisher struct{ cancel context.CancelCauseFunc }
 
 type selectivePublisher struct {
 	bad  string
@@ -154,9 +154,10 @@ func TestIntegrationMalformedCriticalRollsBackEventAndOutbox(t *testing.T) {
 	}
 }
 
-func (*timeoutPublisher) Publish(ctx context.Context, _ Publication) error {
-	<-ctx.Done()
-	return ctx.Err()
+func (p *timeoutPublisher) Publish(ctx context.Context, _ Publication) error {
+	// Trigger the timeout at publish time, after the database has locked the row.
+	p.cancel(context.DeadlineExceeded)
+	return context.Cause(ctx)
 }
 
 func (*timeoutPublisher) Close() {}
@@ -170,13 +171,13 @@ func TestIntegrationOutboxPersistsTimeoutAttempts(t *testing.T) {
 	}
 
 	for range publicationAttempts {
-		call, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-		_, err := s.RelayOne(call, &timeoutPublisher{})
+		call, cancel := context.WithCancelCause(context.Background())
+		_, err := s.RelayOne(call, &timeoutPublisher{cancel: cancel})
 
-		cancel()
+		cancel(nil)
 
-		if err == nil {
-			t.Fatal("timeout not reported")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("publish timeout not reported: %v", err)
 		}
 	}
 

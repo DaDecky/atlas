@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"atlas/services/bnpb/aggregator/internal/placement"
 )
 
 func TestDataIntegrationConcurrentFreshNodeInitialization(t *testing.T) {
@@ -63,14 +65,22 @@ func TestDataIntegrationConcurrentFreshNodeInitialization(t *testing.T) {
 			}
 			defer node.Store.Close()
 
-			var count int
-			if err = node.Store.query.QueryRow(ctx, `SELECT count(*) FROM pg_tables WHERE schemaname LIKE 'shard_%'`).Scan(&count); err != nil || count != 48*8 {
-				t.Error("fresh rollout left missing shard tables", count, err)
+			var missing int
+
+			err = node.Store.query.QueryRow(ctx, `
+				SELECT count(*) FROM generate_series(0, $1::int - 1) AS shard(id)
+				CROSS JOIN unnest(ARRAY['hazard_events', 'source_progress', 'schema_migrations',
+					'source_fence', 'stream_state', 'publication_outbox', 'unprocessed_messages',
+					'field_reports_inbox', 'ingestion_clock']) AS expected(name)
+				WHERE NOT EXISTS (SELECT FROM pg_tables
+					WHERE schemaname = 'shard_' || shard.id AND tablename = expected.name)`, placement.Shards).Scan(&missing)
+			if err != nil || missing != 0 {
+				t.Errorf("fresh rollout left %d missing shard tables: %v", missing, err)
 			}
 		})
 	}
 
 	close(start)
 	wg.Wait()
-	t.Log("three simultaneous fresh initializers completed all 48 shard schemas")
+	t.Logf("three simultaneous fresh initializers completed all %d shard schemas", placement.Shards)
 }
