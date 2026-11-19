@@ -125,10 +125,16 @@ func newPoller(source, base string, store IngestStore, pending chan Publication)
 		Timeout:    100 * time.Millisecond,
 		Backoff:    time.Millisecond,
 		Retries:    1,
-		Client:     &http.Client{},
-		Store:      store,
-		Pending:    pending,
-		Log:        testLog(),
+
+		MaxRecords:         defaultMaxSourceRecords,
+		MaxSourceBytes:     defaultMaxSourceBytes,
+		WarningLookback:    defaultWarningLookback,
+		FailureMarkTimeout: defaultFailureMarkTimeout,
+
+		Client:  &http.Client{},
+		Store:   store,
+		Pending: pending,
+		Log:     testLog(),
 	}
 }
 
@@ -270,7 +276,7 @@ func TestSourceBoundsRetriesAndCancellation(t *testing.T) {
 		{"outage", "", 503, 2},
 		{"malformed", "{}", 200, 1},
 		{"null", "null", 200, 1},
-		{"oversize", string(make([]byte, MaxSourceBytes+1)), 200, 1},
+		{"oversize", string(make([]byte, defaultMaxSourceBytes+1)), 200, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var calls atomic.Int32

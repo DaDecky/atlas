@@ -23,9 +23,9 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	startup, stop := context.WithTimeout(ctx, 15*time.Second)
+	startup, stop := context.WithTimeout(ctx, c.StartupTimeout)
 
-	store, err := aggregator.OpenStore(startup, c.DatabaseURL, c.IngestPool, c.QueryPool)
+	store, err := aggregator.OpenStore(startup, c.DatabaseURL, c.IngestPool, c.QueryPool, c.DBConnectTimeout)
 
 	stop()
 
@@ -37,7 +37,7 @@ func run(log *slog.Logger) error {
 
 	pending := make(chan aggregator.Publication, c.PublishCapacity)
 	worker := &aggregator.PublishWorker{
-		Publisher: &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout},
+		Publisher: &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout, Heartbeat: c.BrokerHeartbeat},
 		Pending:   pending,
 		Timeout:   c.PublishTimeout,
 		Backoff:   c.Backoff,
@@ -67,7 +67,7 @@ func run(log *slog.Logger) error {
 		transport := &http.Transport{
 			MaxConnsPerHost:       1,
 			MaxIdleConnsPerHost:   1,
-			IdleConnTimeout:       30 * time.Second,
+			IdleConnTimeout:       c.SourceIdleConnTimeout,
 			ResponseHeaderTimeout: c.SourceTimeout,
 		}
 		defer transport.CloseIdleConnections()
@@ -84,10 +84,16 @@ func run(log *slog.Logger) error {
 			Timeout:    c.SourceTimeout,
 			Backoff:    c.Backoff,
 			Retries:    c.SourceRetries,
-			Client:     client,
-			Store:      store,
-			Pending:    pending,
-			Log:        log,
+
+			MaxRecords:         c.MaxSourceRecords,
+			MaxSourceBytes:     c.MaxSourceBytes,
+			WarningLookback:    c.WarningLookback,
+			FailureMarkTimeout: c.FailureMarkTimeout,
+
+			Client:  client,
+			Store:   store,
+			Pending: pending,
+			Log:     log,
 		}
 		launch(poller.Run)
 	}
@@ -102,11 +108,11 @@ func run(log *slog.Logger) error {
 	server := &http.Server{
 		Addr:              c.Address,
 		Handler:           api.Handler(),
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: c.HTTPReadHeaderTimeout,
+		ReadTimeout:       c.HTTPReadTimeout,
 		WriteTimeout:      c.QueryTimeout + time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		IdleTimeout:       c.HTTPIdleTimeout,
+		MaxHeaderBytes:    c.HTTPMaxHeaderBytes,
 	}
 
 	done := make(chan error, 1)
@@ -124,7 +130,7 @@ func run(log *slog.Logger) error {
 		cancel()
 	}
 
-	shutdown, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdown, finish := context.WithTimeout(context.Background(), c.ShutdownTimeout)
 	defer finish()
 
 	_ = server.Shutdown(shutdown)
