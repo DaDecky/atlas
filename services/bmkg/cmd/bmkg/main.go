@@ -22,11 +22,11 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	startup, stop := context.WithTimeout(ctx, 15*time.Second)
+	startup, stop := context.WithTimeout(ctx, cfg.StartupTimeout)
 
-	store, err := bmkg.OpenStore(startup, cfg.DatabaseURL)
+	store, err := bmkg.OpenStore(startup, cfg.DatabaseURL, int32(cfg.DBPoolSize), cfg.DBConnectTimeout)
 	if err == nil {
-		err = bmkg.LoadSeed(startup, store)
+		err = bmkg.LoadSeed(startup, store, cfg.MinSeedRecords)
 	}
 
 	stop()
@@ -36,17 +36,17 @@ func run(log *slog.Logger) error {
 	}
 
 	defer store.Close()
-	go bmkg.RunGenerator(ctx, store, bmkg.NewGenerator(bmkg.Seed, time.Now()), cfg.EventInterval, log)
+	go bmkg.RunGenerator(ctx, store, bmkg.NewGenerator(cfg.Seed, time.Now()), cfg.EventInterval, cfg.StoreTimeout, log)
 
 	api := &bmkg.API{Store: store, APIKey: cfg.APIKey, Delay: cfg.Delay, Log: log}
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           api.Handler(),
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       5 * time.Second,
-		WriteTimeout:      5 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
+		MaxHeaderBytes:    cfg.HTTPMaxHeaderBytes,
 	}
 
 	done := make(chan error, 1)
@@ -66,7 +66,7 @@ func run(log *slog.Logger) error {
 		}
 	}
 
-	shutdown, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdown, finish := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer finish()
 
 	_ = server.Shutdown(shutdown)
