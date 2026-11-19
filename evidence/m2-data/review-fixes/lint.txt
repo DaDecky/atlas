@@ -1,0 +1,16 @@
+lint ./consumers/consumer-a/go.mod
+0 issues.
+lint ./consumers/consumer-b/go.mod
+0 issues.
+lint ./demo/go.mod
+0 issues.
+lint ./services/bmkg/go.mod
+0 issues.
+lint ./services/bnpb/aggregator/go.mod
+0 issues.
+lint ./services/bnpb/auth/go.mod
+0 issues.
+lint ./services/bnpb/client-api/go.mod
+0 issues.
+lint ./services/pvmbg/go.mod
+0 issues.

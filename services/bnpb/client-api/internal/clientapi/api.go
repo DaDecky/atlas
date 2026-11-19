@@ -105,11 +105,11 @@ func allowedFilters(raw string) (url.Values, string, error) {
 
 		switch key {
 		case "source":
-			if value != "BMKG" && value != "PVMBG" {
+			if value != "BMKG" && value != "PVMBG" && value != "SATELIT" && value != "SENSOR_PANTAI" {
 				return nil, "", errors.New("invalid source")
 			}
 		case "hazard_type":
-			if value != "SEISMIC" && value != "VOLCANIC" {
+			if value != "SEISMIC" && value != "VOLCANIC" && value != "WILDFIRE" && value != "COASTAL" {
 				return nil, "", errors.New("invalid hazard type")
 			}
 		case "severity":
@@ -316,7 +316,7 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 
 	for _, source := range freshness {
 		var name, state string
-		if json.Unmarshal(source["source"], &name) != nil || (name != "BMKG" && name != "PVMBG") ||
+		if json.Unmarshal(source["source"], &name) != nil || (name != "BMKG" && name != "PVMBG" && name != "SATELIT" && name != "SENSOR_PANTAI") ||
 			json.Unmarshal(source["status"], &state) != nil ||
 			(state != "healthy" && state != "stale" && state != "unavailable") {
 			return nil, errors.New("invalid freshness")

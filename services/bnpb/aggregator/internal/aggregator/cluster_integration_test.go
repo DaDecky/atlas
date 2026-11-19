@@ -64,7 +64,7 @@ func dataCluster(t *testing.T) *Cluster {
 		}
 
 		nodes[name] = node
-		if _, err = node.Store.ingest.Exec(ctx, `TRUNCATE public.publication_outbox; UPDATE public.source_fence SET epoch=1; UPDATE public.ingestion_clock SET last_value='epoch'`); err != nil {
+		if _, err = node.Store.ingest.Exec(ctx, `TRUNCATE public.publication_outbox,public.unprocessed_messages; UPDATE public.source_fence SET epoch=1; UPDATE public.ingestion_clock SET last_value='epoch'`); err != nil {
 			t.Fatal(err)
 		}
 
@@ -95,6 +95,12 @@ func dataCluster(t *testing.T) *Cluster {
 	c := &Cluster{Nodes: nodes, Placement: repo, Deadline: time.Second}
 	for _, source := range []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"} {
 		if err := c.Seal(ctx, source, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for name := range c.Nodes {
+		if _, err := c.detectStore(ctx, name); err != nil {
 			t.Fatal(err)
 		}
 	}

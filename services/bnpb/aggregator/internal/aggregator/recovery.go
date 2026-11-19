@@ -3,6 +3,8 @@ package aggregator
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"time"
 
 	"atlas/services/bnpb/aggregator/internal/placement"
@@ -26,7 +28,8 @@ func (c *Cluster) RunRecovery(ctx context.Context, lease PlacementLease, onError
 			continue
 		}
 
-		cycle, cancel := context.WithCancel(ctx)
+		// A renewing lease must not keep a stalled cycle alive indefinitely.
+		cycle, cancel := context.WithTimeout(ctx, 2*time.Minute)
 
 		renewDone := make(chan struct{})
 		go func() {
@@ -62,104 +65,99 @@ func (c *Cluster) RunRecovery(ctx context.Context, lease PlacementLease, onError
 }
 
 func (c *Cluster) RecoverOnce(ctx context.Context) error {
+	var failures []error
+
+	healthy := map[string]bool{}
+
+	for name := range c.Nodes {
+		missing, err := c.detectStore(ctx, name)
+		if err == nil {
+			err = c.prepareStore(ctx, name, missing)
+		}
+
+		if err != nil {
+			failures = append(failures, fmt.Errorf("store %s: %w", name, err))
+			continue
+		}
+
+		healthy[name] = true
+	}
+
 	table, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return err
 	}
 
-	for name, node := range c.Nodes {
-		call, cancel := c.timeout(ctx)
-		err = node.Store.Health(call)
-
-		cancel()
-
-		if err != nil {
-			continue
-		}
-
-		var schemaCount int
-
-		err = node.Store.query.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_name='hazard_events' AND table_schema LIKE 'shard_%'`).Scan(&schemaCount)
-		if err != nil {
-			return err
-		}
-
-		if schemaCount < placement.Shards {
-			// Mark affected copies behind BEFORE recreating any wiped schemas.
-			for shard, copies := range table.Shards {
-				for i, copy := range copies {
-					if copy.Node != name {
-						continue
-					}
-
-					fresh, v, err := c.Placement.Load(ctx)
-					if err != nil {
-						return err
-					}
-
-					fresh.Shards[shard][i].State = "behind"
-
-					fresh.Generation++
-					if err = c.Placement.CompareAndSwap(ctx, v, fresh); err != nil {
-						return err
-					}
-				}
-			}
-
-			if _, err = node.Store.ingest.Exec(ctx, schema); err != nil {
-				return err
-			}
-
-			if _, err = node.Store.ingest.Exec(ctx, m2Schema); err != nil {
-				return err
-			}
-
-			for _, s := range node.Shards {
-				if _, err = node.Store.initShard(ctx, s.namespace); err != nil {
-					return err
-				}
-			}
-		}
-
-		for source, epoch := range table.WriterEpochs {
-			if err = node.Store.Seal(ctx, source, epoch); err != nil {
-				return err
-			}
-		}
+	keys := make([]string, 0, len(table.Shards))
+	for shard := range table.Shards {
+		keys = append(keys, shard)
 	}
 
-	table, _, err = c.Placement.Load(ctx)
-	if err != nil {
-		return err
-	}
+	sort.Strings(keys)
 
-	for shard, copies := range table.Shards {
-		for _, copy := range copies {
-			if copy.State == "serving" {
+	for _, shard := range keys {
+		for _, holder := range table.Shards[shard] {
+			if holder.State == "serving" || !healthy[holder.Node] {
 				continue
 			}
 
-			n := c.Nodes[copy.Node]
-			if n == nil {
-				continue
+			if err := c.Refill(ctx, shard, holder.Node); err != nil {
+				failures = append(failures, fmt.Errorf("refill %s/%s: %w", shard, holder.Node, err))
 			}
+		}
+	}
+	// Do not move additional copies until the required repairs have completed.
+	if len(failures) == 0 {
+		return c.RebalanceOnce(ctx)
+	}
 
+	return errors.Join(failures...)
+}
+
+func (c *Cluster) prepareStore(ctx context.Context, name string, missing bool) error {
+	node := c.Nodes[name]
+
+	if missing {
+		for _, sql := range []string{schema, m2Schema} {
 			call, cancel := c.timeout(ctx)
-			err = n.Store.Health(call)
+			_, err := node.Store.ingest.Exec(call, sql)
 
 			cancel()
 
 			if err != nil {
-				continue
+				return err
 			}
+		}
 
-			if err = c.Refill(ctx, shard, copy.Node); err != nil {
+		for _, s := range node.Shards {
+			call, cancel := c.timeout(ctx)
+			_, err := node.Store.initShard(call, s.namespace)
+
+			cancel()
+
+			if err != nil {
 				return err
 			}
 		}
 	}
 
-	return c.RebalanceOnce(ctx)
+	table, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		return err
+	}
+
+	for source, epoch := range table.WriterEpochs {
+		call, cancel := c.timeout(ctx)
+		err := node.Store.Seal(call, source, epoch)
+
+		cancel()
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // RebalanceOnce uses the current healthy configured membership. Copy moves are

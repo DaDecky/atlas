@@ -70,7 +70,14 @@ func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
 		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 	}
 
-	c := &Cluster{Nodes: map[string]*DataNode{}, Deadline: 2 * time.Second, Placement: &placement.ConfigMap{Client: client, Origin: config.Placement.Origin, Namespace: config.Placement.Namespace, Name: config.Placement.Name, Token: string(token)}}
+	remote := &placement.ConfigMap{Client: client, Origin: config.Placement.Origin, Namespace: config.Placement.Namespace, Name: config.Placement.Name, Token: string(token)}
+
+	cached, err := placement.WatchConfigMap(ctx, remote)
+	if err != nil {
+		return nil, err
+	}
+
+	c := &Cluster{Nodes: map[string]*DataNode{}, Deadline: shardDeadline, Placement: cached}
 	for _, entry := range config.Nodes {
 		if entry.Name == "" || c.Nodes[entry.Name] != nil {
 			c.Close()
@@ -94,10 +101,30 @@ func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
 		return nil, err
 	}
 
+	for name := range c.Nodes {
+		call, cancel := c.timeout(ctx)
+		err := c.Nodes[name].Store.Health(call)
+
+		cancel()
+
+		if err != nil {
+			continue
+		}
+
+		if _, err := c.detectStore(ctx, name); err != nil {
+			c.Close()
+			return nil, err
+		}
+	}
+
 	return c, nil
 }
 
 func (c *Cluster) Close() {
+	if cached, ok := c.Placement.(*placement.CachedConfigMap); ok {
+		cached.Close()
+	}
+
 	for _, n := range c.Nodes {
 		n.Store.Close()
 	}
@@ -153,7 +180,7 @@ func (c *Cluster) Failure(ctx context.Context, source string, now time.Time) err
 			continue
 		}
 
-		s := c.Nodes[copy.Node].Shards[placement.Shard("metadata:"+source)]
+		s := c.copyStore(copy, placement.Shard("metadata:"+source))
 
 		tx, err := s.begin(ctx, false)
 		if err != nil {
@@ -220,7 +247,12 @@ func (c *Cluster) WarningEvents(ctx context.Context, refs []string) ([]HazardEve
 }
 
 func (c *Cluster) PlacementLease() (*placement.Lease, error) {
-	repo, ok := c.Placement.(*placement.ConfigMap)
+	repository := c.Placement
+	if cached, ok := repository.(*placement.CachedConfigMap); ok {
+		repository = cached.Remote
+	}
+
+	repo, ok := repository.(*placement.ConfigMap)
 	if !ok {
 		return nil, errors.New("placement lease requires Kubernetes repository")
 	}

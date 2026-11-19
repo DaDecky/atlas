@@ -17,6 +17,8 @@ type Store struct {
 	ingest, query *pgxpool.Pool
 	coordination  *pgxpool.Pool
 	namespace     string
+	storeID       string
+	deadline      time.Duration
 }
 
 const columns = `hazard_id, source, source_ref_id, hazard_type, severity, area_name,

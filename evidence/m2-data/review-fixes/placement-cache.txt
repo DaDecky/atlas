@@ -1,0 +1,9 @@
+=== RUN   TestPlacementCacheEliminatesReadGETs
+    cache_test.go:173: 100 uncached loads: 100 GETs; 100 cached loads: 0 GETs after 1 initial GET
+--- PASS: TestPlacementCacheEliminatesReadGETs (0.47s)
+=== RUN   TestPlacementCacheWatchCASAndConflict
+--- PASS: TestPlacementCacheWatchCASAndConflict (0.04s)
+=== RUN   TestPlacementCacheReloadsExpiredWatch
+--- PASS: TestPlacementCacheReloadsExpiredWatch (2.04s)
+PASS
+ok  	atlas/services/bnpb/aggregator/internal/placement	3.567s

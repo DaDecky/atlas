@@ -179,7 +179,7 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 		return 0, ErrStaleEpoch
 	}
 
-	rows, err := tx.Query(ctx, `SELECT `+parkingColumns+` FROM unprocessed_messages WHERE source=$1 AND status<>'recovered' ORDER BY received_at,message_id LIMIT $2 FOR UPDATE`, source, limit)
+	rows, err := tx.Query(ctx, `SELECT `+parkingColumns+` FROM unprocessed_messages WHERE source=$1 AND status<>'recovered' AND reason_code<>'publish_failed' ORDER BY received_at,message_id LIMIT $2 FOR UPDATE`, source, limit)
 	if err != nil {
 		return 0, err
 	}
