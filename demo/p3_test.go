@@ -190,9 +190,20 @@ func checkNoCommittedSecrets(t *testing.T, ev map[string]any) {
 		t.Error(".env is committed")
 	}
 
-	example, err := readEnv(filepath.Join(s.root, ".env.example"))
+	examplePath := filepath.Join(s.root, ".env.example")
+	example, err := readEnv(examplePath)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	template, err := os.ReadFile(examplePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	optional := map[string]bool{}
+	for _, match := range regexp.MustCompile(`(?m)^#[ \t]+([A-Z0-9_]+)=`).FindAllStringSubmatch(string(template), -1) {
+		optional[match[1]] = true
 	}
 
 	compose, err := os.ReadFile(filepath.Join(s.root, "compose.yaml"))
@@ -200,8 +211,8 @@ func checkNoCommittedSecrets(t *testing.T, ev map[string]any) {
 		t.Fatal(err)
 	}
 
-	for _, m := range regexp.MustCompile(`\$\{([A-Z0-9_]+)`).FindAllStringSubmatch(string(compose), -1) {
-		if _, ok := example[m[1]]; !ok {
+	for _, m := range regexp.MustCompile(`\$\{([A-Z0-9_]+)(:\?|:-)?`).FindAllStringSubmatch(string(compose), -1) {
+		if _, ok := example[m[1]]; !ok && !(m[2] == ":-" && optional[m[1]]) {
 			t.Errorf("%s is used by Compose but missing from .env.example", m[1])
 		}
 	}
@@ -230,5 +241,5 @@ func checkNoCommittedSecrets(t *testing.T, ev map[string]any) {
 	}
 
 	ev["files_scanned"] = scanned
-	ev["env_example_variables"] = len(example)
+	ev["env_example_variables"] = len(example) + len(optional)
 }
