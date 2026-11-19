@@ -1,0 +1,39 @@
+{
+  "apiVersion": "kustomize.config.k8s.io/v1beta1",
+  "kind": "Kustomization",
+  "namespace": "sistem-informasi-kebencanaan-bnpb",
+  "resources": [
+    "namespace.yaml",
+    "workloads.yaml",
+    "network-policies.yaml",
+    "../../store",
+    "../vendor/sensor-pantai"
+  ],
+  "configMapGenerator": [
+    {
+      "name": "source-schema-policy",
+      "files": [
+        "policy.json"
+      ]
+    }
+  ],
+  "generatorOptions": {
+    "disableNameSuffixHash": true
+  },
+  "patches": [
+    {
+      "target": {
+        "kind": "Deployment",
+        "name": "sensor-pantai"
+      },
+      "patch": "[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/resources\", \"value\": {\"requests\": {\"memory\": \"128Mi\"}, \"limits\": {\"memory\": \"256Mi\"}}}, {\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/livenessProbe\", \"value\": {\"tcpSocket\": {\"port\": 8080}, \"initialDelaySeconds\": 30, \"periodSeconds\": 10, \"timeoutSeconds\": 2}}]"
+    },
+    {
+      "target": {
+        "kind": "StatefulSet",
+        "name": "canonical-store"
+      },
+      "patch": "[{\"op\": \"add\", \"path\": \"/spec/template/metadata/labels/owner\", \"value\": \"aggregator\"}]"
+    }
+  ]
+}

@@ -100,6 +100,10 @@ services:
       PVMBG_TOKEN: ${PVMBG_TOKEN:?run make env}
       AGGREGATOR_INTERNAL_TOKEN: ${AGGREGATOR_INTERNAL_TOKEN:?run make env}
       POLL_INTERVAL: ${POLL_INTERVAL:-}
+      SOURCE_SCHEMA_POLICY_FILE: /etc/atlas/schema/policy.json
+    configs:
+      - source: source-schema-policy
+        target: /etc/atlas/schema/policy.json
     networks: [sources, internal-api, canonical, events]
     depends_on:
       postgres: {condition: service_healthy}
@@ -133,8 +137,9 @@ services:
       AGGREGATOR_INTERNAL_TOKEN: ${AGGREGATOR_INTERNAL_TOKEN:?run make env}
       AUTH_VALIDATE_TOKEN: ${AUTH_VALIDATE_TOKEN:?run make env}
       AUTH_ED25519_PUBLIC_KEY_B64: ${AUTH_ED25519_PUBLIC_KEY_B64:?run make env}
+      RABBITMQ_URL: amqp://atlas:${RABBITMQ_PASSWORD}@rabbitmq:5672/
     ports: ['127.0.0.1:${CLIENT_API_PORT:-8080}:8080']
-    networks: [auth-api, internal-api]
+    networks: [auth-api, internal-api, events]
     depends_on:
       auth: {condition: service_healthy}
       aggregator: {condition: service_healthy}
@@ -188,6 +193,10 @@ networks:
     internal: true
   pvmbg-store:
     internal: true
+
+configs:
+  source-schema-policy:
+    file: ./deploy/k8s/base/policy.json
 
 volumes:
   postgres-data:

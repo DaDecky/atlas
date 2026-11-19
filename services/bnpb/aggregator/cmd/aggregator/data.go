@@ -15,6 +15,7 @@ type runtimeData interface {
 	aggregator.AuditData
 	aggregator.Parking
 	aggregator.Outbox
+	aggregator.FieldReportStore
 	Close()
 }
 
@@ -26,9 +27,10 @@ func openData(ctx context.Context, c aggregator.Config) (runtimeData, error) {
 	return aggregator.OpenStore(ctx, c.DatabaseURL, c.IngestPool, c.QueryPool)
 }
 
-func dataHandler(api *aggregator.API, store runtimeData, c aggregator.Config) http.Handler {
+func dataHandler(api *aggregator.API, store runtimeData, c aggregator.Config, replay map[string]aggregator.ReplaySource) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/internal/audit/", (&aggregator.AuditAPI{Store: store, Parking: store, Token: os.Getenv("AUDIT_TOKEN"), Timeout: 10 * time.Second}).Handler())
+	mux.Handle("/internal/ops/", (&aggregator.OpsAPI{Parking: store, Token: c.InternalToken, Replay: replay}).Handler())
 
 	if cluster, ok := store.(*aggregator.Cluster); ok {
 		mux.Handle("GET /internal/data/metrics", aggregator.DataMetricsHandler(cluster, c.InternalToken))
@@ -39,9 +41,14 @@ func dataHandler(api *aggregator.API, store runtimeData, c aggregator.Config) ht
 	return mux
 }
 
-func ingestData(store runtimeData, source string) (aggregator.IngestStore, error) {
+func ingestData(ctx context.Context, store runtimeData, source string) (aggregator.IngestStore, error) {
 	if local, ok := store.(*aggregator.Store); ok {
-		return local, nil
+		epoch, err := local.Epoch(ctx, source)
+		if err != nil {
+			return nil, err
+		}
+
+		return &aggregator.EpochIngest{Data: local, Source: source, WriterEpoch: epoch}, nil
 	}
 	// Fail closed instead of running three uncoordinated M1 pollers. Razi starts
 	// EpochIngest only while holding the source Leadership contract.

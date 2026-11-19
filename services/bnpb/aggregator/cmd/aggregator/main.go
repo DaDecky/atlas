@@ -66,8 +66,11 @@ func run(log *slog.Logger) error {
 	}
 
 	launch(func(ctx context.Context) {
-		aggregator.RunRelay(ctx, store, &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout}, 200*time.Millisecond, func(err error) { log.Error("outbox_relay_failed", "reason", err.Error()) })
+		aggregator.RunRelay(ctx, store, &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout, Log: log}, 200*time.Millisecond, func(err error) { log.Error("outbox_relay_failed", "reason", err.Error()) })
 	})
+	launch((&aggregator.FieldReportsConsumer{URL: c.RabbitMQURL, Store: store, Log: log}).Run)
+
+	replay := map[string]aggregator.ReplaySource{}
 
 	sources := []string{"BMKG", "PVMBG"}
 	if os.Getenv("M2_READ_ONLY") == "1" {
@@ -75,7 +78,7 @@ func run(log *slog.Logger) error {
 	}
 
 	for _, source := range sources {
-		ingest, err := ingestData(store, source)
+		ingest, err := ingestData(ctx, store, source)
 		if err != nil {
 			cancel()
 			wg.Wait()
@@ -100,6 +103,7 @@ func run(log *slog.Logger) error {
 			Transport:     transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		}
+
 		poller := &aggregator.Poller{
 			Source:     source,
 			BaseURL:    base,
@@ -112,8 +116,31 @@ func run(log *slog.Logger) error {
 			Store:      ingest,
 			Pending:    pending,
 			Log:        log,
+			PolicyFile: os.Getenv("SOURCE_SCHEMA_POLICY_FILE"),
 		}
+		if writer, ok := ingest.(*aggregator.EpochIngest); ok {
+			replay[source] = func(ctx context.Context, limit int) (int, error) {
+				return store.Replay(ctx, source, writer.WriterEpoch, limit, func(message aggregator.ParkedMessage) (aggregator.HazardEvent, error) {
+					return poller.DecodeParked(ctx, message)
+				})
+			}
+			launch(func(ctx context.Context) {
+				aggregator.RunParkingRetries(ctx, store, source, writer.WriterEpoch,
+					func(message aggregator.ParkedMessage) (aggregator.HazardEvent, error) {
+						return poller.DecodeParked(ctx, message)
+					},
+					func(err error) { log.Warn("parking_retry_failed", "source", source, "reason", err.Error()) })
+			})
+		}
+
 		launch(poller.Run)
+	}
+
+	if err = startSatellite(ctx, store, launch, log); err != nil {
+		cancel()
+		wg.Wait()
+
+		return err
 	}
 
 	api := &aggregator.API{
@@ -125,7 +152,7 @@ func run(log *slog.Logger) error {
 	}
 	server := &http.Server{
 		Addr:              c.Address,
-		Handler:           dataHandler(api, store, c),
+		Handler:           dataHandler(api, store, c, replay),
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       5 * time.Second,
 		WriteTimeout:      c.QueryTimeout + time.Second,

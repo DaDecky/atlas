@@ -1,0 +1,1486 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "auth-db"
+      },
+      "spec": {
+        "selector": {
+          "app": "auth-db"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 5432,
+            "targetPort": 5432
+          }
+        ],
+        "clusterIP": "None"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "auth-db"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "auth-db"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "auth-db",
+              "role": "store",
+              "owner": "auth"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "auth-db",
+                "image": "postgres:18.3-alpine",
+                "imagePullPolicy": "IfNotPresent",
+                "ports": [
+                  {
+                    "containerPort": 5432,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "512Mi"
+                  },
+                  "limits": {
+                    "memory": "1Gi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-c",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 5432
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-c",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "auth-db-credentials"
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "serviceName": "auth-db",
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "bmkg-db"
+      },
+      "spec": {
+        "selector": {
+          "app": "bmkg-db"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 5432,
+            "targetPort": 5432
+          }
+        ],
+        "clusterIP": "None"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "bmkg-db"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "bmkg-db"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "bmkg-db",
+              "role": "store",
+              "owner": "bmkg"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "bmkg-db",
+                "image": "postgres:18.3-alpine",
+                "imagePullPolicy": "IfNotPresent",
+                "ports": [
+                  {
+                    "containerPort": 5432,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "512Mi"
+                  },
+                  "limits": {
+                    "memory": "1Gi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-c",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 5432
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-c",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "bmkg-db-credentials"
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "serviceName": "bmkg-db",
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pvmbg-db"
+      },
+      "spec": {
+        "selector": {
+          "app": "pvmbg-db"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 5432,
+            "targetPort": 5432
+          }
+        ],
+        "clusterIP": "None"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "pvmbg-db"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "pvmbg-db"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pvmbg-db",
+              "role": "store",
+              "owner": "pvmbg"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "pvmbg-db",
+                "image": "postgres:18.3-alpine",
+                "imagePullPolicy": "IfNotPresent",
+                "ports": [
+                  {
+                    "containerPort": 5432,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "512Mi"
+                  },
+                  "limits": {
+                    "memory": "1Gi"
+                  }
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-c",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 5432
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "sh",
+                      "-c",
+                      "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""
+                    ]
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "pvmbg-db-credentials"
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/postgresql"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "serviceName": "pvmbg-db",
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "rabbitmq"
+      },
+      "spec": {
+        "selector": {
+          "app": "rabbitmq"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 5672,
+            "targetPort": 5672
+          }
+        ],
+        "clusterIP": "None"
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "StatefulSet",
+      "metadata": {
+        "name": "rabbitmq"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "rabbitmq"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "rabbitmq",
+              "role": "broker"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "rabbitmq",
+                "image": "rabbitmq:4.2.5-alpine",
+                "imagePullPolicy": "IfNotPresent",
+                "ports": [
+                  {
+                    "containerPort": 5672,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "512Mi"
+                  },
+                  "limits": {
+                    "memory": "1Gi"
+                  }
+                },
+                "readinessProbe": {
+                  "tcpSocket": {
+                    "port": 5672
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 5672
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "tcpSocket": {
+                    "port": 5672
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "rabbitmq-credentials"
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/rabbitmq"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "serviceName": "rabbitmq",
+        "volumeClaimTemplates": [
+          {
+            "metadata": {
+              "name": "data"
+            },
+            "spec": {
+              "accessModes": [
+                "ReadWriteOnce"
+              ],
+              "resources": {
+                "requests": {
+                  "storage": "2Gi"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "bmkg"
+      },
+      "spec": {
+        "selector": {
+          "app": "bmkg"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8081,
+            "targetPort": 8081
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "bmkg"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "bmkg"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "bmkg",
+              "role": "mock"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "bmkg",
+                "image": "atlas/bmkg:m2-local",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "containerPort": 8081,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "64Mi"
+                  },
+                  "limits": {
+                    "memory": "128Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 8081
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "bmkg-credentials"
+                    }
+                  }
+                ]
+              }
+            ],
+            "initContainers": [
+              {
+                "name": "wait-dependencies",
+                "image": "atlas/bmkg:m2-local",
+                "imagePullPolicy": "Never",
+                "command": [
+                  "sh",
+                  "-c",
+                  "until nc -z -w 2 bmkg-db 5432; do sleep 1; done"
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "runAsUser": 10001
+                }
+              }
+            ],
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": false
+          }
+        },
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxUnavailable": 0,
+            "maxSurge": 1
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "pvmbg"
+      },
+      "spec": {
+        "selector": {
+          "app": "pvmbg"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8082,
+            "targetPort": 8082
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "pvmbg"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "pvmbg"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "pvmbg",
+              "role": "mock"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "pvmbg",
+                "image": "atlas/pvmbg:m2-local",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "containerPort": 8082,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "64Mi"
+                  },
+                  "limits": {
+                    "memory": "128Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8082
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 8082
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8082
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "pvmbg-credentials"
+                    }
+                  }
+                ]
+              }
+            ],
+            "initContainers": [
+              {
+                "name": "wait-dependencies",
+                "image": "atlas/pvmbg:m2-local",
+                "imagePullPolicy": "Never",
+                "command": [
+                  "sh",
+                  "-c",
+                  "until nc -z -w 2 pvmbg-db 5432; do sleep 1; done"
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "runAsUser": 10001
+                }
+              }
+            ],
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": false
+          }
+        },
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxUnavailable": 0,
+            "maxSurge": 1
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "auth"
+      },
+      "spec": {
+        "selector": {
+          "app": "auth"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8084,
+            "targetPort": 8084
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "auth"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "auth"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "auth",
+              "role": "auth"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "auth",
+                "image": "atlas/auth:m2-local",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "containerPort": 8084,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8084
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 8084
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8084
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "auth-credentials"
+                    }
+                  },
+                  {
+                    "configMapRef": {
+                      "name": "auth-config"
+                    }
+                  }
+                ]
+              }
+            ],
+            "initContainers": [
+              {
+                "name": "wait-dependencies",
+                "image": "atlas/auth:m2-local",
+                "imagePullPolicy": "Never",
+                "command": [
+                  "sh",
+                  "-c",
+                  "until nc -z -w 2 auth-db 5432; do sleep 1; done"
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "runAsUser": 10001
+                }
+              }
+            ],
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": false
+          }
+        },
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxUnavailable": 0,
+            "maxSurge": 1
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "client-api"
+      },
+      "spec": {
+        "selector": {
+          "app": "client-api"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "client-api"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "client-api"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "client-api",
+              "role": "client-api"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "client-api",
+                "image": "atlas/client-api:m2-local",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "containerPort": 8080,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 8080
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "client-api-credentials"
+                    }
+                  },
+                  {
+                    "configMapRef": {
+                      "name": "client-api-config"
+                    }
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": false
+          }
+        },
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxUnavailable": 0,
+            "maxSurge": 1
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "aggregator"
+      },
+      "spec": {
+        "selector": {
+          "app": "aggregator"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8083,
+            "targetPort": 8083
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "aggregator"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "aggregator"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "aggregator",
+              "role": "aggregator"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "aggregator",
+                "image": "atlas/aggregator:m2-local",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "containerPort": 8083,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "256Mi"
+                  },
+                  "limits": {
+                    "memory": "512Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8083
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 8083
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8083
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "env": [
+                  {
+                    "name": "SOURCE_SCHEMA_POLICY_FILE",
+                    "value": "/etc/atlas/schema/policy.json"
+                  }
+                ],
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "aggregator-credentials"
+                    }
+                  },
+                  {
+                    "configMapRef": {
+                      "name": "aggregator-config"
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "schema-policy",
+                    "mountPath": "/etc/atlas/schema",
+                    "readOnly": true
+                  }
+                ],
+                "lifecycle": {
+                  "preStop": {
+                    "exec": {
+                      "command": [
+                        "sh",
+                        "-c",
+                        "sleep 5"
+                      ]
+                    }
+                  }
+                }
+              }
+            ],
+            "initContainers": [
+              {
+                "name": "wait-dependencies",
+                "image": "atlas/aggregator:m2-local",
+                "imagePullPolicy": "Never",
+                "command": [
+                  "sh",
+                  "-c",
+                  "until nc -z -w 2 canonical-store-0.canonical-store 5432; do sleep 1; done && until nc -z -w 2 rabbitmq 5672; do sleep 1; done"
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "32Mi"
+                  },
+                  "limits": {
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "runAsUser": 10001
+                }
+              }
+            ],
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": true,
+            "serviceAccountName": "aggregator-data",
+            "terminationGracePeriodSeconds": 30,
+            "topologySpreadConstraints": [
+              {
+                "maxSkew": 1,
+                "topologyKey": "kubernetes.io/hostname",
+                "whenUnsatisfiable": "ScheduleAnyway",
+                "labelSelector": {
+                  "matchLabels": {
+                    "app": "aggregator"
+                  }
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "schema-policy",
+                "configMap": {
+                  "name": "source-schema-policy"
+                }
+              }
+            ]
+          }
+        },
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxUnavailable": 0,
+            "maxSurge": 1
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "consumer-a"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "consumer-a"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "consumer-a",
+              "role": "consumer"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "consumer-a",
+                "image": "atlas/consumer-a:m2-local",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "containerPort": 8091,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8091
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 8091
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8091
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "consumer-a-credentials"
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": false,
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "consumer-a-data"
+                }
+              }
+            ]
+          }
+        },
+        "strategy": {
+          "type": "Recreate"
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "consumer-a-data"
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "resources": {
+          "requests": {
+            "storage": "1Gi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "consumer-b"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "consumer-b"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "consumer-b",
+              "role": "consumer"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "consumer-b",
+                "image": "atlas/consumer-b:m2-local",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "containerPort": 8092,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8092
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 8092
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8092
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "consumer-b-credentials"
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": false,
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "consumer-b-data"
+                }
+              }
+            ]
+          }
+        },
+        "strategy": {
+          "type": "Recreate"
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "consumer-b-data"
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "resources": {
+          "requests": {
+            "storage": "1Gi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "sensor-pantai"
+      },
+      "spec": {
+        "selector": {
+          "app": "sensor-pantai"
+        },
+        "ports": [
+          {
+            "name": "tcp",
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ]
+      }
+    }
+  ]
+}

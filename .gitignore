@@ -6,3 +6,5 @@ coverage.out
 /bin/
 /.demo/
 docs/materials
+__pycache__/
+/.deploy/
