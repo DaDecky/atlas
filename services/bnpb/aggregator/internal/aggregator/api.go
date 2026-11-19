@@ -20,6 +20,8 @@ import (
 type ReadStore interface {
 	Read(context.Context, Query) (Response, error)
 	Health(context.Context) error
+	// AnalyticsCounts counts events in the stores and names the units it could not read.
+	AnalyticsCounts(ctx context.Context, since, until *time.Time) ([]AnalyticsCount, []string, error)
 }
 
 type API struct {

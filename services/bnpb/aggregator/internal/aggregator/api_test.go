@@ -39,6 +39,10 @@ func (s *readStub) Read(ctx context.Context, q Query) (Response, error) {
 
 func (s *readStub) Health(context.Context) error { return s.err }
 
+func (s *readStub) AnalyticsCounts(context.Context, *time.Time, *time.Time) ([]AnalyticsCount, []string, error) {
+	return nil, nil, s.err
+}
+
 func request(handler http.Handler, path, token string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest("GET", path, nil)
 	if token != "" {

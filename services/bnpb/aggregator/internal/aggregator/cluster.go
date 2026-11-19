@@ -417,7 +417,8 @@ func (c *Cluster) LoadState(ctx context.Context, source string) (StreamState, er
 	return *state, nil
 }
 
-func (c *Cluster) fanout(ctx context.Context, read func(context.Context, *Store) ([]HazardEvent, error)) ([]HazardEvent, []string, error) {
+// fanout reads every shard from one serving copy and names the shards it could not read.
+func fanout[T any](ctx context.Context, c *Cluster, read func(context.Context, *Store) ([]T, error)) ([]T, []string, error) {
 	t, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -428,7 +429,7 @@ func (c *Cluster) fanout(ctx context.Context, read func(context.Context, *Store)
 		wg sync.WaitGroup
 	)
 
-	events := []HazardEvent{}
+	events := []T{}
 	unavailable := []string{}
 	sem := make(chan struct{}, c.Limits.ReadWorkers)
 
@@ -483,7 +484,7 @@ func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
 
 	var mu sync.Mutex
 
-	rows, missing, err := c.fanout(ctx, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
+	rows, missing, err := fanout(ctx, c, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
 		r, err := s.Read(ctx, q)
 		if r.NextCursor != nil {
 			mu.Lock()

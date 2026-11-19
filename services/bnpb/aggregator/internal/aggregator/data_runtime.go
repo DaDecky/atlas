@@ -223,7 +223,7 @@ func (c *Cluster) WarningEvents(ctx context.Context, refs []string) ([]HazardEve
 		wanted[ref] = true
 	}
 
-	events, missing, err := c.fanout(ctx, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
+	events, missing, err := fanout(ctx, c, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
 		tx, err := s.begin(ctx, true)
 		if err != nil {
 			return nil, err
