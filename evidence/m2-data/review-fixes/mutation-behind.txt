@@ -1,9 +1,0 @@
-=== RUN   TestFailedCopyWriteMarksCopyBehind
-    review_integration_test.go:86: failed copy still eligible for reads serving
---- FAIL: TestFailedCopyWriteMarksCopyBehind (6.91s)
-FAIL
-FAIL	atlas/services/bnpb/aggregator/internal/aggregator	6.919s
-testing: warning: no tests to run
-PASS
-ok  	atlas/services/bnpb/aggregator/internal/placement	1.011s [no tests to run]
-FAIL
