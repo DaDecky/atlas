@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"atlas/services/bnpb/aggregator/internal/aggregator"
+	"atlas/services/bnpb/aggregator/internal/leadership"
 )
 
 type launcher func(func(context.Context))
@@ -67,14 +68,19 @@ func openStartupData(ctx context.Context, c aggregator.Config) (runtimeData, err
 
 // startWorkers starts the placement planner, the outbox relay, the field report consumer, and the sources.
 func startWorkers(ctx context.Context, store runtimeData, c aggregator.Config, launch launcher, log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
+	// The planner and the sources share one elector, so the pod holds one Kubernetes client for leases.
+	var leader leadership.Leader
+
 	if cluster, ok := store.(*aggregator.Cluster); ok {
-		lease, err := cluster.PlacementLease()
+		election, err := sourceElection(c, log)
 		if err != nil {
 			return nil, err
 		}
 
+		leader = leaseLeader{election}
+
 		launch(func(ctx context.Context) {
-			cluster.RunRecovery(ctx, lease, func(err error) { log.Error("refill_failed", "reason", err.Error()) })
+			cluster.RunRecovery(ctx, leader, func(err error) { log.Error("refill_failed", "reason", err.Error()) })
 		})
 	}
 
@@ -85,7 +91,7 @@ func startWorkers(ctx context.Context, store runtimeData, c aggregator.Config, l
 	})
 	launch((&aggregator.FieldReportsConsumer{URL: c.RabbitMQURL, Heartbeat: c.BrokerHeartbeat, Store: store, Log: log}).Run)
 
-	return startSources(ctx, store, c, launch, log)
+	return startSources(ctx, store, c, leader, launch, log)
 }
 
 func newServer(c aggregator.Config, handler http.Handler) *http.Server {

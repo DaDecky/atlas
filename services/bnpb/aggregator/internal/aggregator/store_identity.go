@@ -43,7 +43,7 @@ func (c *Cluster) detectStore(ctx context.Context, name string) (bool, error) {
 		return false, err
 	}
 
-	err = c.updatePlacement(call, func(t *placement.Table) (bool, error) {
+	err = placement.Update(call, c.Placement, func(t *placement.Table) (bool, error) {
 		changed := false
 
 		for shard, copies := range t.Shards {

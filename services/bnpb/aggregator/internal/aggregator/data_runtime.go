@@ -2,12 +2,9 @@ package aggregator
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -58,28 +55,10 @@ func OpenClusterConfig(ctx context.Context, path string, limits ClusterLimits) (
 		return nil, errors.New("at least three configured data nodes required")
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	token, err := os.ReadFile(config.Placement.TokenFile)
+	remote, err := placement.NewConfigMap(config.Placement.Origin, config.Placement.TokenFile, config.Placement.CAFile, config.Placement.Namespace, config.Placement.Name)
 	if err != nil {
 		return nil, err
 	}
-
-	if config.Placement.CAFile != "" {
-		raw, err := os.ReadFile(config.Placement.CAFile)
-		if err != nil {
-			return nil, err
-		}
-
-		roots := x509.NewCertPool()
-		if !roots.AppendCertsFromPEM(raw) {
-			return nil, errors.New("invalid placement CA")
-		}
-
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
-	}
-
-	remote := &placement.ConfigMap{Client: client, Origin: config.Placement.Origin, Namespace: config.Placement.Namespace, Name: config.Placement.Name, Token: string(token)}
 
 	cached, err := placement.WatchConfigMap(ctx, remote)
 	if err != nil {
@@ -259,20 +238,6 @@ func (c *Cluster) WarningEvents(ctx context.Context, refs []string) ([]HazardEve
 	}
 
 	return events, err
-}
-
-func (c *Cluster) PlacementLease() (*placement.Lease, error) {
-	repository := c.Placement
-	if cached, ok := repository.(*placement.CachedConfigMap); ok {
-		repository = cached.Remote
-	}
-
-	repo, ok := repository.(*placement.ConfigMap)
-	if !ok {
-		return nil, errors.New("placement lease requires Kubernetes repository")
-	}
-
-	return &placement.Lease{Client: repo.Client, Origin: repo.Origin, Namespace: repo.Namespace, Name: repo.Name + "-recovery", Token: repo.Token, Holder: correlationID(), Duration: 15 * time.Second}, nil
 }
 
 func offlineDataNode(name, url string, limits ClusterLimits) (*DataNode, error) {

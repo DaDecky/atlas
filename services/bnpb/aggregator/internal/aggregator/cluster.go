@@ -36,9 +36,6 @@ type ClusterLimits struct {
 	IngestPool, QueryPool     int32
 }
 
-// Five attempts follow the default of the Kubernetes client retry on conflict.
-const placementAttempts = 5
-
 var _ ShardStore = (*Cluster)(nil)
 
 func OpenDataNode(ctx context.Context, name, url string, limits ClusterLimits) (*DataNode, error) {
@@ -204,7 +201,7 @@ func (c *Cluster) seal(ctx context.Context, source string, epoch int64, strict b
 		return errors.New("seal majority unavailable")
 	}
 
-	return c.updatePlacement(ctx, func(t *placement.Table) (bool, error) {
+	return placement.Update(ctx, c.Placement, func(t *placement.Table) (bool, error) {
 		if epoch < t.WriterEpochs[source] || strict && epoch == t.WriterEpochs[source] {
 			return false, ErrStaleEpoch
 		}
@@ -230,7 +227,7 @@ func (c *Cluster) seal(ctx context.Context, source string, epoch int64, strict b
 // MarkBehind fences one copy out of reads. Only the writer epoch and the incarnation of that
 // copy must still hold, so a change to another shard does not refuse the mark.
 func (c *Cluster) MarkBehind(ctx context.Context, r BehindRequest) error {
-	return c.updatePlacement(ctx, func(t *placement.Table) (bool, error) {
+	return placement.Update(ctx, c.Placement, func(t *placement.Table) (bool, error) {
 		if t.WriterEpochs[r.Source] != r.Epoch {
 			return false, ErrStaleEpoch
 		}
@@ -255,31 +252,6 @@ func (c *Cluster) MarkBehind(ctx context.Context, r BehindRequest) error {
 
 		return true, t.Transition(r.Shard, r.Copy, placement.Behind)
 	})
-}
-
-// updatePlacement applies change to the newest table and swaps it in, and retries when another
-// writer swapped first. change sees a fresh table on every attempt, so it rechecks its own rules.
-func (c *Cluster) updatePlacement(ctx context.Context, change func(*placement.Table) (bool, error)) error {
-	for range placementAttempts {
-		t, version, err := c.Placement.Load(ctx)
-		if err != nil {
-			return err
-		}
-
-		changed, err := change(&t)
-		if err != nil || !changed {
-			return err
-		}
-
-		t.Generation++
-
-		err = c.Placement.CompareAndSwap(ctx, version, t)
-		if !errors.Is(err, placement.ErrConflict) {
-			return err
-		}
-	}
-
-	return placement.ErrConflict
 }
 
 // swapPlacement swaps in t only if the table is still at version. A step whose preconditions

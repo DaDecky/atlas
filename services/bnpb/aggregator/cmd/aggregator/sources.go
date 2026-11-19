@@ -139,7 +139,7 @@ func sourcePollWork(c aggregator.Config, store runtimeData, source string, log *
 	}
 }
 
-func startSources(ctx context.Context, store runtimeData, c aggregator.Config, launch launcher, log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
+func startSources(ctx context.Context, store runtimeData, c aggregator.Config, leader leadership.Leader, launch launcher, log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
 	replay := map[string]aggregator.ReplaySource{}
 	if os.Getenv("INGESTION_DISABLED") == "1" {
 		return replay, nil
@@ -153,12 +153,7 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 	streams := map[string]leadership.Work{aggregator.SourceSatellite: sat, aggregator.SourceSensorPantai: sensorWork(c, store, log)}
 
 	if cluster, ok := store.(*aggregator.Cluster); ok {
-		election, err := sourceElection(c, log)
-		if err != nil {
-			return nil, err
-		}
-
-		runner := leadership.NewRunner(leaseLeader{election}, cluster, log)
+		runner := leadership.NewRunner(leader, cluster, log)
 
 		for _, source := range aggregator.PolledSources {
 			work := sourcePollWork(c, store, source, log)

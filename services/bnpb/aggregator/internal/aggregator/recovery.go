@@ -7,17 +7,20 @@ import (
 	"sort"
 	"time"
 
+	"atlas/services/bnpb/aggregator/internal/leadership"
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
 
-type PlacementLease interface{ Acquire(context.Context) error }
+// PlannerLease names the lease of the placement planner. Only its holder refills and moves copies.
+const PlannerLease = "PLACEMENT"
 
 // RunRecovery is the placement planner: recover missing schemas, fence the
 // restored stores, rebuild behind copies, then restore two serving copies.
-func (c *Cluster) RunRecovery(ctx context.Context, lease PlacementLease, onError func(error)) {
+func (c *Cluster) RunRecovery(ctx context.Context, leader leadership.Leader, onError func(error)) {
 	for ctx.Err() == nil {
-		if err := lease.Acquire(ctx); err != nil {
-			if !errors.Is(err, placement.ErrLeaseHeld) {
+		term, err := leader.Lead(ctx, PlannerLease)
+		if err != nil {
+			if ctx.Err() == nil {
 				onError(err)
 			}
 
@@ -28,27 +31,22 @@ func (c *Cluster) RunRecovery(ctx context.Context, lease PlacementLease, onError
 			continue
 		}
 
-		// A renewing lease must not keep a stalled cycle alive indefinitely.
+		c.plan(ctx, term, onError)
+		term.Release()
+	}
+}
+
+// plan runs recovery cycles while the term holds, with a pause between cycles.
+func (c *Cluster) plan(ctx context.Context, term leadership.Term, onError func(error)) {
+	for ctx.Err() == nil && term.Check(ctx) == nil {
+		// A lost term must not keep a stalled cycle alive indefinitely.
 		cycle, cancel := context.WithTimeout(ctx, 2*time.Minute)
 
-		renewDone := make(chan struct{})
+		watched := make(chan struct{})
 		go func() {
-			defer close(renewDone)
+			defer close(watched)
 
-			ticker := time.NewTicker(3 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-cycle.Done():
-					return
-				case <-ticker.C:
-					if err := lease.Acquire(cycle); err != nil {
-						cancel()
-						return
-					}
-				}
-			}
+			watchTerm(cycle, cancel, term)
 		}()
 
 		if err := c.RecoverOnce(cycle); err != nil {
@@ -56,10 +54,28 @@ func (c *Cluster) RunRecovery(ctx context.Context, lease PlacementLease, onError
 		}
 
 		cancel()
-		<-renewDone
+		<-watched
 
 		if !pause(ctx, 2*time.Second) {
 			return
+		}
+	}
+}
+
+// watchTerm ends the cycle as soon as the term is lost.
+func watchTerm(cycle context.Context, cancel context.CancelFunc, term leadership.Term) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-cycle.Done():
+			return
+		case <-ticker.C:
+			if err := term.Check(cycle); err != nil {
+				cancel()
+				return
+			}
 		}
 	}
 }

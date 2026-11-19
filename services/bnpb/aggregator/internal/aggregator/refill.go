@@ -23,7 +23,7 @@ import (
 func (c *Cluster) Refill(ctx context.Context, shard, target string) error {
 	var donor placement.Copy
 
-	err := c.updatePlacement(ctx, func(t *placement.Table) (bool, error) {
+	err := placement.Update(ctx, c.Placement, func(t *placement.Table) (bool, error) {
 		found := false
 		donor = placement.Copy{}
 
