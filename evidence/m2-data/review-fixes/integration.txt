@@ -1,0 +1,146 @@
+=== RUN   TestIntegrationStorePersistsSeedAndFiltersSince
+--- PASS: TestIntegrationStorePersistsSeedAndFiltersSince (0.27s)
+PASS
+ok  	atlas/services/bmkg/internal/bmkg	1.311s
+=== RUN   TestIntegrationStorePersistsReportsAndSchemaVersion
+--- PASS: TestIntegrationStorePersistsReportsAndSchemaVersion (0.29s)
+PASS
+ok  	atlas/services/pvmbg/internal/pvmbg	1.315s
+=== RUN   TestDataIntegrationDualWriteWipeRefillAndNextLoss
+    cluster_integration_test.go:112: run make data-integration
+--- SKIP: TestDataIntegrationDualWriteWipeRefillAndNextLoss (0.00s)
+=== RUN   TestDataIntegrationReplicatedContract
+=== RUN   TestDataIntegrationReplicatedContract/idempotent_revisions_and_checkpoint_rollback
+    cluster_integration_test.go:234: run make data-integration
+=== RUN   TestDataIntegrationReplicatedContract/source_epochs_fence_every_write_path
+    cluster_integration_test.go:234: run make data-integration
+=== RUN   TestDataIntegrationReplicatedContract/events_state_and_offset_commit_together
+    cluster_integration_test.go:234: run make data-integration
+=== RUN   TestDataIntegrationReplicatedContract/concurrent_replay_has_one_effect
+    cluster_integration_test.go:234: run make data-integration
+--- PASS: TestDataIntegrationReplicatedContract (0.00s)
+    --- SKIP: TestDataIntegrationReplicatedContract/idempotent_revisions_and_checkpoint_rollback (0.00s)
+    --- SKIP: TestDataIntegrationReplicatedContract/source_epochs_fence_every_write_path (0.00s)
+    --- SKIP: TestDataIntegrationReplicatedContract/events_state_and_offset_commit_together (0.00s)
+    --- SKIP: TestDataIntegrationReplicatedContract/concurrent_replay_has_one_effect (0.00s)
+=== RUN   TestDataIntegrationLiveRefillAndAudit
+    cluster_integration_test.go:238: run make data-integration
+--- SKIP: TestDataIntegrationLiveRefillAndAudit (0.00s)
+=== RUN   TestDataIntegrationAutomaticWipeRecoveryAndParking
+    cluster_integration_test.go:354: run make data-integration
+--- SKIP: TestDataIntegrationAutomaticWipeRecoveryAndParking (0.00s)
+=== RUN   TestDataIntegrationNewNodeJoinsWithoutStoppingReads
+    cluster_integration_test.go:401: run make data-integration
+--- SKIP: TestDataIntegrationNewNodeJoinsWithoutStoppingReads (0.00s)
+=== RUN   TestDataIntegrationTakeoverExcludesUnsealedReplica
+    cluster_integration_test.go:485: run make data-integration
+--- SKIP: TestDataIntegrationTakeoverExcludesUnsealedReplica (0.00s)
+=== RUN   TestDataIntegrationConcurrentWritersDoNotStarveIngestionPool
+    cluster_integration_test.go:524: run make data-integration
+--- SKIP: TestDataIntegrationConcurrentWritersDoNotStarveIngestionPool (0.00s)
+=== RUN   TestIntegrationSavePublishProcessCrash
+    crash_integration_test.go:213: process_exit=77 committed_hazard_id=e266c012da3e6777f82c3958f6189a357a069ec986103711903f9b56e5f82250 checkpoint=2026-09-30T07:00:00+07:00 replay_publications=0 control_hazard_id=2275536ca78626e3f33b1250d69f83ea5b88f4f53c7b4f5ae5f8fcf49deae10e confirmed=true; outbox retains committed publication across process crash
+--- PASS: TestIntegrationSavePublishProcessCrash (0.49s)
+=== RUN   TestIntegrationDataAuditPaginationAnalyticsOutboxParking
+--- PASS: TestIntegrationDataAuditPaginationAnalyticsOutboxParking (0.16s)
+=== RUN   TestIntegrationParkingAutomaticRetryAndClockRollback
+--- PASS: TestIntegrationParkingAutomaticRetryAndClockRollback (0.10s)
+=== RUN   TestIntegrationStoreCommitRollbackRestartAndOwnership
+    integration_test.go:156: restart_snapshot={"data":[{"hazard_id":"e4b61b24194cf9af8c5d334f27b0ac4fe50d320590f1dd952d3a35e50f60ec02","source":"PVMBG","source_ref_id":"report-2","hazard_type":"VOLCANIC","severity":"SIAGA","area_name":"Merapi","latitude":-7.54,"longitude":110.44,"occurred_at":"2026-09-30T07:00:10+07:00","ingested_at":"2026-11-19T18:17:02.291212+07:00","attributes":{"ash_column_height_m":1200.0,"confidence_level":0.85,"eruption_count_24h":3,"observations":{"sensor":"demo","quality":[1,true,null]},"volcano_id":"merapi"},"revision":1},{"hazard_id":"e266c012da3e6777f82c3958f6189a357a069ec986103711903f9b56e5f82250","source":"PVMBG","source_ref_id":"report-1","hazard_type":"VOLCANIC","severity":"SIAGA","area_name":"Merapi","latitude":-7.54,"longitude":110.44,"occurred_at":"2026-09-30T07:00:00+07:00","ingested_at":"2026-11-19T18:17:02.291212+07:00","attributes":{"ash_column_height_m":1200.0,"confidence_level":0.8,"eruption_count_24h":3,"volcano_id":"merapi"},"revision":2}],"sources":[{"source":"PVMBG","status":"stale","last_success_at":"2026-11-19T18:17:02.291212+07:00","stale_since":"2026-11-19T18:17:02.291212+07:00"}],"partial":false,"unavailable_units":[],"next_cursor":null} checkpoint=2026-09-30T07:00:10+07:00
+    integration_test.go:157: verified unique identity, rollback, checkpoint restart, JSONB and denied non-owner connection
+--- PASS: TestIntegrationStoreCommitRollbackRestartAndOwnership (0.29s)
+=== RUN   TestIntegrationLivePollingMappingFreshnessAndReads
+    integration_test.go:358: outage_snapshot={"data":[{"hazard_id":"e4b61b24194cf9af8c5d334f27b0ac4fe50d320590f1dd952d3a35e50f60ec02","source":"PVMBG","source_ref_id":"report-2","hazard_type":"VOLCANIC","severity":"SIAGA","area_name":"Merapi","latitude":-7.54,"longitude":110.44,"occurred_at":"2026-09-30T07:00:10+07:00","ingested_at":"2026-11-19T18:17:02.656119+07:00","attributes":{"ash_column_height_m":1200.0,"confidence_level":0.85,"eruption_count_24h":3,"observations":{"sensor":"demo","quality":[1,true,null]},"volcano_id":"merapi"},"revision":1},{"hazard_id":"e266c012da3e6777f82c3958f6189a357a069ec986103711903f9b56e5f82250","source":"PVMBG","source_ref_id":"report-1","hazard_type":"VOLCANIC","severity":"SIAGA","area_name":"Merapi","latitude":-7.54,"longitude":110.44,"occurred_at":"2026-09-30T07:00:00+07:00","ingested_at":"2026-11-19T18:17:02.637559+07:00","attributes":{"ash_column_height_m":1200.0,"eruption_count_24h":3,"volcano_id":"merapi"},"revision":1}],"sources":[{"source":"PVMBG","status":"stale","last_success_at":"2026-11-19T18:17:05.684111+07:00","stale_since":"2026-11-19T18:17:05.701825+07:00"}],"partial":false,"unavailable_units":[],"next_cursor":null}
+    integration_test.go:386: verified live additive schema, late warning, three-second isolation, stored reads, stale outage and automatic recovery
+--- PASS: TestIntegrationLivePollingMappingFreshnessAndReads (3.24s)
+=== RUN   TestIntegrationRabbitFanoutConfirmAndReconnect
+    integration_test.go:504: verified publisher confirms, durable fanout, persistent messages, same IDs, offline queue backlog and connection recovery
+--- PASS: TestIntegrationRabbitFanoutConfirmAndReconnect (0.03s)
+=== RUN   TestIntegrationOutboxAtomicPriorityAndRetry
+--- PASS: TestIntegrationOutboxAtomicPriorityAndRetry (0.11s)
+=== RUN   TestIntegrationOutboxParksPoisonAndRecoversAfterBrokerOutage
+--- PASS: TestIntegrationOutboxParksPoisonAndRecoversAfterBrokerOutage (0.08s)
+=== RUN   TestIntegrationOutboxMalformedPayloadDoesNotBlockQueue
+--- PASS: TestIntegrationOutboxMalformedPayloadDoesNotBlockQueue (0.07s)
+=== RUN   TestIntegrationMalformedCriticalRollsBackEventAndOutbox
+--- PASS: TestIntegrationMalformedCriticalRollsBackEventAndOutbox (0.05s)
+=== RUN   TestIntegrationOutboxPersistsTimeoutAttempts
+--- PASS: TestIntegrationOutboxPersistsTimeoutAttempts (0.19s)
+=== RUN   TestDataIntegrationParkingDegradedCopy
+    review_integration_test.go:185: run make data-integration
+--- SKIP: TestDataIntegrationParkingDegradedCopy (0.00s)
+=== RUN   TestDataIntegrationSlowCopyUsesHealthyPeer
+    review_integration_test.go:248: run make data-integration
+--- SKIP: TestDataIntegrationSlowCopyUsesHealthyPeer (0.00s)
+=== RUN   TestDataIntegrationCopyWritesShareDeadline
+    review_integration_test.go:288: run make data-integration
+--- SKIP: TestDataIntegrationCopyWritesShareDeadline (0.00s)
+=== RUN   TestDataIntegrationRecoveryContinuesAfterRefillFailure
+    review_integration_test.go:318: run make data-integration
+--- SKIP: TestDataIntegrationRecoveryContinuesAfterRefillFailure (0.00s)
+=== RUN   TestDataIntegrationPlannerDatabaseCallDeadline
+    review_integration_test.go:359: run make data-integration
+--- SKIP: TestDataIntegrationPlannerDatabaseCallDeadline (0.00s)
+=== RUN   TestDataIntegrationRefillCopiesOnlyUnpublishedEvents
+    review_integration_test.go:375: run make data-integration
+--- SKIP: TestDataIntegrationRefillCopiesOnlyUnpublishedEvents (0.00s)
+=== RUN   TestDataIntegrationRestartDoesNotRebuildConstraints
+    review_integration_test.go:419: run make data-integration
+--- SKIP: TestDataIntegrationRestartDoesNotRebuildConstraints (0.00s)
+=== RUN   TestDataIntegrationRefillPreservesParkedPublications
+    review_integration_test.go:448: run make data-integration
+--- SKIP: TestDataIntegrationRefillPreservesParkedPublications (0.00s)
+=== RUN   TestDataIntegrationRecoveryInitializesFreshStorePublicTables
+    review_integration_test.go:488: run make data-integration
+--- SKIP: TestDataIntegrationRecoveryInitializesFreshStorePublicTables (0.00s)
+=== RUN   TestIntegrationShardStoreContract
+=== RUN   TestIntegrationShardStoreContract/idempotent_revisions_and_checkpoint_rollback
+=== RUN   TestIntegrationShardStoreContract/source_epochs_fence_every_write_path
+=== RUN   TestIntegrationShardStoreContract/events_state_and_offset_commit_together
+=== RUN   TestIntegrationShardStoreContract/concurrent_replay_has_one_effect
+--- PASS: TestIntegrationShardStoreContract (0.28s)
+    --- PASS: TestIntegrationShardStoreContract/idempotent_revisions_and_checkpoint_rollback (0.08s)
+    --- PASS: TestIntegrationShardStoreContract/source_epochs_fence_every_write_path (0.08s)
+    --- PASS: TestIntegrationShardStoreContract/events_state_and_offset_commit_together (0.07s)
+    --- PASS: TestIntegrationShardStoreContract/concurrent_replay_has_one_effect (0.06s)
+=== RUN   TestIntegrationShardStoreRestart
+--- PASS: TestIntegrationShardStoreRestart (0.15s)
+PASS
+ok  	atlas/services/bnpb/aggregator/internal/aggregator	6.250s
+testing: warning: no tests to run
+PASS
+ok  	atlas/services/bnpb/aggregator/internal/placement	1.020s [no tests to run]
+=== RUN   TestIntegrationSessionSurvivesAuthStoreRestart
+--- PASS: TestIntegrationSessionSurvivesAuthStoreRestart (0.07s)
+=== RUN   TestIntegrationConcurrentRefreshRevocationAndExpiry
+--- PASS: TestIntegrationConcurrentRefreshRevocationAndExpiry (0.06s)
+PASS
+ok  	atlas/services/bnpb/auth/internal/auth	1.152s
+=== RUN   TestIntegrationRedeliveryAfterPersistBeforeAck
+--- PASS: TestIntegrationRedeliveryAfterPersistBeforeAck (0.03s)
+=== RUN   TestIntegrationQueueBoundsAndRetention
+--- PASS: TestIntegrationQueueBoundsAndRetention (1.22s)
+=== RUN   TestIntegrationIndependentQueuesAndRestartCatchup
+--- PASS: TestIntegrationIndependentQueuesAndRestartCatchup (0.12s)
+=== RUN   TestIntegrationExistingQueueKeepsBacklog
+=== RUN   TestIntegrationExistingQueueKeepsBacklog/existing_with_different_limits
+=== RUN   TestIntegrationExistingQueueKeepsBacklog/new_queue
+--- PASS: TestIntegrationExistingQueueKeepsBacklog (1.29s)
+    --- PASS: TestIntegrationExistingQueueKeepsBacklog/existing_with_different_limits (1.27s)
+    --- PASS: TestIntegrationExistingQueueKeepsBacklog/new_queue (0.02s)
+PASS
+ok  	atlas/consumers/consumer-a/internal/consumer	3.671s
+=== RUN   TestIntegrationRedeliveryAfterPersistBeforeAck
+--- PASS: TestIntegrationRedeliveryAfterPersistBeforeAck (0.03s)
+=== RUN   TestIntegrationQueueBoundsAndRetention
+--- PASS: TestIntegrationQueueBoundsAndRetention (1.21s)
+=== RUN   TestIntegrationIndependentQueuesAndRestartCatchup
+--- PASS: TestIntegrationIndependentQueuesAndRestartCatchup (0.11s)
+=== RUN   TestIntegrationExistingQueueKeepsBacklog
+=== RUN   TestIntegrationExistingQueueKeepsBacklog/existing_with_different_limits
+=== RUN   TestIntegrationExistingQueueKeepsBacklog/new_queue
+--- PASS: TestIntegrationExistingQueueKeepsBacklog (1.27s)
+    --- PASS: TestIntegrationExistingQueueKeepsBacklog/existing_with_different_limits (1.25s)
+    --- PASS: TestIntegrationExistingQueueKeepsBacklog/new_queue (0.02s)
+PASS
+ok  	atlas/consumers/consumer-b/internal/consumer	3.642s

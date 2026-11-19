@@ -22,7 +22,7 @@ type DataNode struct {
 }
 
 // Cluster routes writes to both holders and reads one serving copy per shard.
-// Repository is authoritative; every operation reads a fresh placement version.
+// Placement snapshots are supplied by the watched repository.
 type Cluster struct {
 	Nodes     map[string]*DataNode
 	Placement placement.Repository
@@ -83,7 +83,7 @@ func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
 func (c *Cluster) timeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	d := c.Deadline
 	if d <= 0 {
-		d = 2 * time.Second
+		d = shardDeadline
 	}
 
 	return context.WithTimeout(ctx, d)
@@ -335,148 +335,40 @@ func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time
 }
 
 func (c *Cluster) writeCopies(ctx context.Context, t placement.Table, shard string, b WriteBatch, cp *time.Time, state *StreamState) ([]HazardEvent, error) {
-	var changed []HazardEvent
-
-	succeeded := 0
-	failures := []string{}
-	replay := false
-
-	for _, copy := range t.Shards[shard] {
-		if copy.State == "behind" {
-			continue
-		}
-
-		node := c.Nodes[copy.Node]
-		if node == nil {
-			failures = append(failures, copy.Node)
-			continue
-		}
-
-		call, cancel := c.timeout(ctx)
-
-		var (
-			events []HazardEvent
-			err    error
-		)
-
-		s := node.Shards[shard]
-
+	return c.replicate(ctx, t, shard, b.Source, b.Epoch, func(call context.Context, s *Store) ([]HazardEvent, error) {
 		switch {
 		case state != nil:
-			events, err = s.CommitState(call, b, *state)
+			return s.CommitState(call, b, *state)
 		case cp != nil:
-			events, err = s.CommitCheckpoint(call, b, *cp)
+			return s.CommitCheckpoint(call, b, *cp)
 		default:
-			events, err = s.Upsert(call, b)
+			return s.Upsert(call, b)
 		}
-
-		cancel()
-
-		if errors.Is(err, ErrStaleEpoch) {
-			return nil, err
-		}
-
-		if errors.Is(err, ErrStaleOffset) {
-			replay = true
-			succeeded++
-
-			continue
-		}
-
-		if err != nil {
-			failures = append(failures, copy.Node)
-			continue
-		}
-
-		succeeded++
-
-		if len(events) > len(changed) {
-			changed = events
-		}
-	}
-
-	if succeeded == 0 {
-		return nil, errors.New("no serving write copy available")
-	}
-
-	for _, node := range failures {
-		if err := c.MarkBehind(ctx, BehindRequest{Source: b.Source, Epoch: b.Epoch, Shard: shard, Copy: node, Generation: t.Generation}); err != nil {
-			return nil, err
-		}
-
-		var err error
-
-		t, _, err = c.Placement.Load(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if replay && len(changed) == 0 && state != nil {
-		return nil, ErrStaleOffset
-	}
-
-	return changed, nil
-}
-
-func (c *Cluster) metadata(ctx context.Context, source string, read func(*Store) error) error {
-	t, _, err := c.Placement.Load(ctx)
-	if err != nil {
-		return err
-	}
-
-	err = errors.New("no serving metadata copy")
-
-	for _, copy := range t.Shards[placement.Shard("metadata:"+source)] {
-		if copy.State != "serving" {
-			continue
-		}
-
-		n := c.Nodes[copy.Node]
-		if n == nil {
-			continue
-		}
-
-		if err = read(n.Shards[placement.Shard("metadata:"+source)]); err == nil {
-			return nil
-		}
-	}
-
-	return err
+	})
 }
 
 func (c *Cluster) Checkpoint(ctx context.Context, source string) (*time.Time, error) {
-	var result *time.Time
-
-	err := c.metadata(ctx, source, func(s *Store) error {
-		call, cancel := c.timeout(ctx)
-		defer cancel()
-
-		var err error
-
-		result, err = s.Checkpoint(call, source)
-
-		return err
-	})
-
-	return result, err
+	return readMetadata(ctx, c, source, func(call context.Context, s *Store) (*time.Time, error) { return s.Checkpoint(call, source) })
 }
 
 func (c *Cluster) LoadState(ctx context.Context, source string) (StreamState, error) {
-	var result StreamState
+	state, err := readMetadata(ctx, c, source, func(call context.Context, s *Store) (*StreamState, error) {
+		value, err := s.LoadState(call, source)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
 
-	err := c.metadata(ctx, source, func(s *Store) error {
-		call, cancel := c.timeout(ctx)
-		defer cancel()
-
-		var err error
-
-		result, err = s.LoadState(call, source)
-
-		return err
+		return &value, err
 	})
+	if err != nil {
+		return StreamState{}, err
+	}
 
-	return result, err
+	if state == nil {
+		return StreamState{}, pgx.ErrNoRows
+	}
+
+	return *state, nil
 }
 
 func (c *Cluster) fanout(ctx context.Context, read func(context.Context, *Store) ([]HazardEvent, error)) ([]HazardEvent, []string, error) {
@@ -492,7 +384,7 @@ func (c *Cluster) fanout(ctx context.Context, read func(context.Context, *Store)
 
 	events := []HazardEvent{}
 	unavailable := []string{}
-	sem := make(chan struct{}, 8)
+	sem := make(chan struct{}, shardReadWorkers)
 
 	for shard, copies := range t.Shards {
 		wg.Go(func() {
@@ -509,29 +401,14 @@ func (c *Cluster) fanout(ctx context.Context, read func(context.Context, *Store)
 
 			defer func() { <-sem }()
 
-			for _, copy := range copies {
-				if copy.State != "serving" {
-					continue
-				}
+			rows, err := readCopies(ctx, c, copies, shard, read)
+			if err == nil {
+				mu.Lock()
 
-				n := c.Nodes[copy.Node]
-				if n == nil {
-					continue
-				}
+				events = append(events, rows...)
+				mu.Unlock()
 
-				call, cancel := c.timeout(ctx)
-				rows, err := read(call, n.Shards[shard])
-
-				cancel()
-
-				if err == nil {
-					mu.Lock()
-
-					events = append(events, rows...)
-					mu.Unlock()
-
-					return
-				}
+				return
 			}
 
 			mu.Lock()
@@ -590,15 +467,16 @@ func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
 	}
 
 	for _, source := range sources(q) {
-		fresh := Freshness{Source: source, Status: "unavailable"}
-		_ = c.metadata(ctx, source, func(store *Store) error {
-			tx, err := store.begin(ctx, true)
-			if err != nil {
-				return err
-			}
-			defer tx.Rollback(ctx)
+		fresh, err := readMetadata(ctx, c, source, func(call context.Context, store *Store) (Freshness, error) {
+			fresh := Freshness{Source: source, Status: "unavailable"}
 
-			err = tx.QueryRow(ctx, `SELECT last_success_at,stale_since FROM source_progress WHERE source=$1`, source).Scan(&fresh.LastSuccessAt, &fresh.StaleSince)
+			tx, err := store.begin(call, true)
+			if err != nil {
+				return fresh, err
+			}
+			defer tx.Rollback(call)
+
+			err = tx.QueryRow(call, `SELECT last_success_at,stale_since FROM source_progress WHERE source=$1`, source).Scan(&fresh.LastSuccessAt, &fresh.StaleSince)
 			if err == nil && fresh.LastSuccessAt != nil {
 				fresh.Status = "healthy"
 				if fresh.StaleSince != nil {
@@ -606,8 +484,11 @@ func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
 				}
 			}
 
-			return err
+			return fresh, err
 		})
+		if err != nil {
+			fresh = Freshness{Source: source, Status: "unavailable"}
+		}
 
 		out.Sources = append(out.Sources, fresh)
 	}

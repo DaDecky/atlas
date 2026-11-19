@@ -317,7 +317,7 @@ func (c *Cluster) Checksum(ctx context.Context, source string) (Checksum, error)
 				continue
 			}
 
-			s := c.Nodes[copy.Node].Shards[shard]
+			s := c.copyStore(copy, shard)
 			call, cancel := c.timeout(ctx)
 			_, err := s.references(call, source, "", true)
 
@@ -391,7 +391,7 @@ func (c *Cluster) Location(ctx context.Context, id string) (LocationResult, erro
 		}
 
 		call, cancel := c.timeout(ctx)
-		exists, err := c.Nodes[copy.Node].Shards[shard].contains(call, id)
+		exists, err := c.copyStore(copy, shard).contains(call, id)
 
 		cancel()
 

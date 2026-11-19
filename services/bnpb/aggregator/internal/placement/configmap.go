@@ -75,13 +75,18 @@ func (c *ConfigMap) Load(ctx context.Context) (Table, string, error) {
 }
 
 func (c *ConfigMap) CompareAndSwap(ctx context.Context, version string, t Table) error {
+	_, err := c.swap(ctx, version, t)
+	return err
+}
+
+func (c *ConfigMap) swap(ctx context.Context, version string, t Table) (string, error) {
 	if err := t.Validate(); err != nil {
-		return err
+		return "", err
 	}
 
 	raw, err := json.Marshal(t)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	cm := configMap{APIVersion: "v1", Kind: "ConfigMap", Data: map[string]string{"placement.json": string(raw)}}
@@ -90,22 +95,31 @@ func (c *ConfigMap) CompareAndSwap(ctx context.Context, version string, t Table)
 
 	body, err := json.Marshal(cm)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	resp, err := c.request(ctx, http.MethodPut, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 409 {
-		return ErrConflict
+		return "", ErrConflict
 	}
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("placement PUT status %d", resp.StatusCode)
+		return "", fmt.Errorf("placement PUT status %d", resp.StatusCode)
 	}
 
-	return nil
+	var updated configMap
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&updated); err != nil {
+		return "", err
+	}
+
+	if updated.Metadata.ResourceVersion == "" {
+		return "", errors.New("placement PUT missing resource version")
+	}
+
+	return updated.Metadata.ResourceVersion, nil
 }

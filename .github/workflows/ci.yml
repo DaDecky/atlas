@@ -47,6 +47,8 @@ jobs:
           cache-dependency-path: '**/go.sum'
       # Starts disposable PostgreSQL and RabbitMQ with the Docker that the runner provides.
       - run: make integration
+      # Starts four PostgreSQL stores for the replication, refill, and takeover tests.
+      - run: make data-integration
 
   dockerfile-lint:
     name: dockerfile-lint

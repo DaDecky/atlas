@@ -24,3 +24,13 @@ BEGIN
  END LOOP;
 END $$;
 SQL
+
+# Persist one identity for this data directory. A recreated volume gets a new ID.
+psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname canonical <<'SQL'
+SET ROLE aggregator;
+CREATE TABLE public.store_identity (
+ singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+ id text NOT NULL DEFAULT gen_random_uuid()::text
+);
+INSERT INTO public.store_identity(singleton) VALUES(true);
+SQL

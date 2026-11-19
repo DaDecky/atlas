@@ -22,38 +22,18 @@ func (c *Cluster) Park(ctx context.Context, m ParkedMessage) error {
 	}
 
 	shard := placement.Shard("metadata:" + m.Source)
-	ok := 0
+	_, err = c.replicate(ctx, t, shard, m.Source, t.WriterEpochs[m.Source], func(call context.Context, s *Store) ([]HazardEvent, error) {
+		return nil, s.Park(call, m)
+	})
 
-	for _, copy := range t.Shards[shard] {
-		if copy.State == "behind" {
-			continue
-		}
-
-		n := c.Nodes[copy.Node]
-		if n == nil {
-			continue
-		}
-
-		call, cancel := c.timeout(ctx)
-		err = n.Shards[shard].Park(call, m)
-
-		cancel()
-
-		if err == nil {
-			ok++
-		} else {
-			return err
-		}
-	}
-
-	if ok != 2 {
-		return errors.New("parking requires both copies until degraded placement is fenced")
-	}
-
-	return nil
+	return err
 }
 
 func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, limit int) (ParkingPage, error) {
+	return c.listUnprocessed(ctx, source, cursor, limit, true)
+}
+
+func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, limit int, publications bool) (ParkingPage, error) {
 	out := ParkingPage{Items: []ParkedMessage{}}
 	if limit < 1 || limit > 1000 {
 		return out, errors.New("invalid limit")
@@ -79,7 +59,6 @@ func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, li
 	var cutoff *ParkedMessage
 
 	for _, src := range requested {
-		var page ParkingPage
 		// Local cursor filters the same global timestamp/ID, but binds the source.
 		local := ""
 
@@ -90,7 +69,9 @@ func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, li
 			local = base64.RawURLEncoding.EncodeToString(raw)
 		}
 
-		err := c.metadata(ctx, src, func(s *Store) error { var err error; page, err = s.ListUnprocessed(ctx, src, local, limit); return err })
+		page, err := readMetadata(ctx, c, src, func(call context.Context, s *Store) (ParkingPage, error) {
+			return s.ListUnprocessed(call, src, local, limit)
+		})
 		if err != nil {
 			return out, err
 		}
@@ -102,6 +83,35 @@ func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, li
 				cutoff = &last
 			}
 		}
+	}
+
+	if publications {
+		// Publication failures live beside each node's outbox, not in source shards.
+		for _, node := range c.Nodes {
+			call, cancel := c.timeout(ctx)
+			page, err := node.Store.ListUnprocessed(call, source, cursor, limit)
+
+			cancel()
+
+			if err != nil {
+				continue
+			}
+
+			out.Items = append(out.Items, page.Items...)
+		}
+	}
+
+	dedup := map[string]ParkedMessage{}
+	for _, m := range out.Items {
+		old, exists := dedup[m.MessageID]
+		if !exists || m.Attempts > old.Attempts {
+			dedup[m.MessageID] = m
+		}
+	}
+
+	out.Items = out.Items[:0]
+	for _, m := range dedup {
+		out.Items = append(out.Items, m)
 	}
 
 	sort.Slice(out.Items, func(i, j int) bool {
@@ -181,15 +191,11 @@ func (c *Cluster) replay(ctx context.Context, source string, epoch int64, limit 
 	var page ParkingPage
 
 	if dueOnly || reason != "" {
-		err = c.metadata(ctx, source, func(s *Store) error {
-			var inner error
-
-			page.Items, inner = s.replayCandidates(ctx, source, limit, reason, dueOnly)
-
-			return inner
+		page.Items, err = readMetadata(ctx, c, source, func(call context.Context, s *Store) ([]ParkedMessage, error) {
+			return s.replayCandidates(call, source, limit, reason, dueOnly)
 		})
 	} else {
-		page, err = c.ListUnprocessed(ctx, source, "", limit)
+		page, err = c.listUnprocessed(ctx, source, "", limit, false)
 	}
 
 	if err != nil {
@@ -199,7 +205,12 @@ func (c *Cluster) replay(ctx context.Context, source string, epoch int64, limit 
 	recovered := 0
 
 	blocked := map[string]bool{}
+
 	for _, m := range page.Items {
+		if m.ReasonCode == "publish_failed" {
+			continue
+		}
+
 		if blocked[m.SourceRefID] {
 			continue
 		}
@@ -255,47 +266,32 @@ func (c *Cluster) event(ctx context.Context, id string) (HazardEvent, error) {
 	}
 
 	shard := placement.Shard(id)
-	missing := false
 
-	for _, copy := range t.Shards[shard] {
-		if copy.State != "serving" || c.Nodes[copy.Node] == nil {
-			continue
-		}
-
-		s := c.Nodes[copy.Node].Shards[shard]
-
-		call, cancel := c.timeout(ctx)
-
+	event, err := readCopies(ctx, c, t.Shards[shard], shard, func(call context.Context, s *Store) (*HazardEvent, error) {
 		tx, err := s.begin(call, true)
 		if err != nil {
-			cancel()
-
-			missing = true
-
-			continue
+			return nil, err
 		}
+		defer tx.Rollback(call)
 
 		h, err := scanEvent(tx.QueryRow(call, `SELECT `+columns+` FROM hazard_events WHERE hazard_id=$1`, id))
-		_ = tx.Rollback(call)
-
-		cancel()
-
-		if err == nil {
-			return h, nil
-		}
-
+		// A healthy absence completes the lookup; a slow second copy cannot turn it
+		// into an outage or prevent ingestion of a genuinely new event.
 		if errors.Is(err, pgx.ErrNoRows) {
-			return h, ErrNotFound
+			return nil, nil
 		}
 
-		missing = true
+		return &h, err
+	})
+	if err != nil {
+		return HazardEvent{}, err
 	}
 
-	if missing {
-		return HazardEvent{}, errors.New("canonical copy unavailable")
+	if event == nil {
+		return HazardEvent{}, ErrNotFound
 	}
 
-	return HazardEvent{}, ErrNotFound
+	return *event, nil
 }
 
 func (c *Cluster) markParking(ctx context.Context, source string, epoch int64, m ParkedMessage, recovered bool) error {
@@ -319,7 +315,7 @@ func (c *Cluster) markParking(ctx context.Context, source string, epoch int64, m
 			return errors.New("parking copy unavailable")
 		}
 
-		tx, err := n.Shards[shard].begin(ctx, false)
+		tx, err := c.copyStore(copy, shard).begin(ctx, false)
 		if err != nil {
 			return err
 		}

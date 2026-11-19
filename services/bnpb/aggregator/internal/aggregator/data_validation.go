@@ -16,6 +16,10 @@ func validateBatch(b WriteBatch) error {
 	}
 
 	for _, h := range b.Events {
+		if _, err := eventCritical(h); err != nil {
+			return err
+		}
+
 		if h.Source != b.Source || h.HazardID == "" || h.SourceRefID == "" || h.OccurredAt.IsZero() || h.IngestedAt.IsZero() || h.Attributes == nil {
 			return errors.New("invalid event identity or timestamps")
 		}

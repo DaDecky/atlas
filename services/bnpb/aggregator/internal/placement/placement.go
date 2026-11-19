@@ -10,8 +10,9 @@ import (
 )
 
 type Copy struct {
-	Node  string `json:"node"`
-	State string `json:"state"`
+	Node    string `json:"node"`
+	State   string `json:"state"`
+	StoreID string `json:"store_id,omitempty"`
 }
 
 type Table struct {
@@ -47,7 +48,7 @@ func New(nodes []string) (Table, error) {
 
 		ranked := append([]string(nil), t.Nodes...)
 		sort.Slice(ranked, func(i, j int) bool { return score(shard, ranked[i]) > score(shard, ranked[j]) })
-		t.Shards[shard] = []Copy{{ranked[0], "serving"}, {ranked[1], "serving"}}
+		t.Shards[shard] = []Copy{{Node: ranked[0], State: "serving"}, {Node: ranked[1], State: "serving"}}
 	}
 
 	return t, nil

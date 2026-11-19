@@ -265,7 +265,7 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 }
 
 func pendingParking(ctx context.Context, tx pgx.Tx, source string, limit int, reason string, dueOnly, lock bool) ([]ParkedMessage, error) {
-	query := `SELECT ` + parkingColumns + ` FROM unprocessed_messages m WHERE m.source=$1 AND m.status<>'recovered'
+	query := `SELECT ` + parkingColumns + ` FROM unprocessed_messages m WHERE m.source=$1 AND m.status<>'recovered' AND m.reason_code<>'publish_failed'
  AND ($4='' OR (m.reason_code=$4 AND NOT EXISTS(
  SELECT 1 FROM unprocessed_messages p WHERE p.source=m.source AND p.source_ref_id=m.source_ref_id
  AND p.status<>'recovered' AND p.reason_code<>$4 AND (p.received_at,p.message_id)<(m.received_at,m.message_id))))

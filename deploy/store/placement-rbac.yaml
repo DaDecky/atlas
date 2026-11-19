@@ -11,7 +11,7 @@ rules:
   - apiGroups: ['']
     resources: [configmaps]
     resourceNames: [canonical-placement]
-    verbs: [get, update]
+    verbs: [get, update, watch]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     resourceNames: [canonical-placement-recovery]

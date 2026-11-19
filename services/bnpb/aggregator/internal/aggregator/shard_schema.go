@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -17,9 +18,38 @@ func (s *Store) begin(ctx context.Context, readOnly bool) (pgx.Tx, error) {
 		opts = pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
 	}
 
-	tx, err := pool.BeginTx(ctx, opts)
+	call := ctx
+
+	cancel := func() {}
+	if s.deadline > 0 {
+		call, cancel = context.WithTimeout(ctx, s.deadline)
+	}
+
+	tx, err := pool.BeginTx(call, opts)
+
+	cancel()
+
 	if err != nil {
 		return nil, err
+	}
+
+	if s.deadline > 0 {
+		tx = &deadlineTx{Tx: tx, deadline: s.deadline}
+	}
+
+	if s.storeID != "" {
+		var matches bool
+
+		err = tx.QueryRow(ctx, `SELECT id=$1 FROM public.store_identity WHERE singleton`, s.storeID).Scan(&matches)
+		if err != nil || !matches {
+			_ = tx.Rollback(ctx)
+
+			if err != nil {
+				return nil, err
+			}
+
+			return nil, errors.New("store identity changed; copy needs refill")
+		}
 	}
 
 	if s.namespace != "" {
@@ -66,11 +96,6 @@ func (s *Store) initShard(ctx context.Context, name string) (*Store, error) {
 	migration := strings.ReplaceAll(strings.ReplaceAll(m2Schema, "BEGIN;", ""), "COMMIT;", "")
 	if _, err = tx.Exec(ctx, migration); err != nil {
 		return nil, fmt.Errorf("shard migration: %w", err)
-	}
-
-	if _, err = tx.Exec(ctx, `ALTER TABLE hazard_events ALTER COLUMN source_ref_id TYPE text COLLATE "C";
- CREATE INDEX IF NOT EXISTS hazard_ingested ON hazard_events(ingested_at,hazard_id)`); err != nil {
-		return nil, err
 	}
 
 	if err = tx.Commit(ctx); err != nil {

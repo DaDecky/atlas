@@ -289,6 +289,19 @@ func TestStoreFailureIsUnavailableAndLogged(t *testing.T) {
 	}
 }
 
+func TestRequestLogNamesCallerAddress(t *testing.T) {
+	var logs bytes.Buffer
+
+	a := testAPI(t, 0)
+	a.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+
+	request(a.Handler(), http.MethodGet, "/volcanic-reports", "", authorized)
+
+	if !strings.Contains(logs.String(), `"remote_addr":"192.0.2.1:1234"`) {
+		t.Fatalf("request log misses the caller address: %s", logs.String())
+	}
+}
+
 // P1 starts on the old schema, switches at runtime, and keeps serving valid reports without a restart.
 func TestSchemaChangeAtRuntime(t *testing.T) {
 	a := testAPI(t, 0)
