@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"atlas/services/bnpb/auth/internal/auth"
 )
@@ -22,9 +21,9 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	startup, stop := context.WithTimeout(ctx, 15*time.Second)
+	startup, stop := context.WithTimeout(ctx, cfg.StartupTimeout)
 
-	store, err := auth.OpenStore(startup, cfg.DatabaseURL)
+	store, err := auth.OpenStore(startup, cfg.DatabaseURL, int32(cfg.DBPoolSize), cfg.DBConnectTimeout)
 
 	stop()
 
@@ -43,16 +42,18 @@ func run(log *slog.Logger) error {
 		Audience:      cfg.Audience,
 		AccessTTL:     cfg.AccessTTL,
 		RefreshTTL:    cfg.RefreshTTL,
+		StoreTimeout:  cfg.StoreTimeout,
+		MaxBodyBytes:  int64(cfg.MaxBodyBytes),
 		Log:           log,
 	}
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           api.Handler(),
-		ReadHeaderTimeout: 3 * time.Second,
-		ReadTimeout:       5 * time.Second,
-		WriteTimeout:      5 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    16 << 10,
+		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
+		ReadTimeout:       cfg.HTTPReadTimeout,
+		WriteTimeout:      cfg.HTTPWriteTimeout,
+		IdleTimeout:       cfg.HTTPIdleTimeout,
+		MaxHeaderBytes:    cfg.HTTPMaxHeaderBytes,
 	}
 
 	done := make(chan error, 1)
@@ -70,7 +71,7 @@ func run(log *slog.Logger) error {
 		cancel()
 	}
 
-	shutdown, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdown, finish := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer finish()
 
 	_ = server.Shutdown(shutdown)
