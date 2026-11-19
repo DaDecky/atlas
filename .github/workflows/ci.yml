@@ -32,3 +32,54 @@ jobs:
           # Every module has its own go.sum, and none sits at the repo root.
           cache-dependency-path: '**/go.sum'
       - run: make ${{ matrix.target }}
+
+  integration:
+    name: integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.4'
+          cache-dependency-path: '**/go.sum'
+      # Starts disposable PostgreSQL and RabbitMQ with the Docker that the runner provides.
+      - run: make integration
+
+  dockerfile-lint:
+    name: dockerfile-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: |
+          docker run --rm -v "$PWD:/work" -w /work --entrypoint sh \
+            hadolint/hadolint:v2.15.1-alpine@sha256:a1d49ae1a4e83c1dbad26b8c1ad7588c8bd1e04f4866b34ad3cac50335198552 \
+            -c "find . -name Dockerfile -not -path './.git/*' -exec hadolint --failure-threshold warning {} +"
+
+  compose-validate:
+    name: compose-validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Compose needs the generated .env that holds the secrets.
+      - run: ./scripts/env.sh
+      - run: docker compose config -q
+
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # The files at this commit are scanned. The allowlist lives in .gitleaks.toml.
+      - run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.30.1 detect --no-git --source /repo --redact

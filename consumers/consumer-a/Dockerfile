@@ -10,5 +10,5 @@ RUN adduser -D -u 10001 atlas && mkdir -p /data && chown atlas:atlas /data
 COPY --from=build /consumer-a /usr/local/bin/consumer-a
 USER atlas
 EXPOSE 8091
-HEALTHCHECK --interval=10s --timeout=3s CMD wget -q -O /dev/null http://127.0.0.1:8091/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8091/health"]
 ENTRYPOINT ["consumer-a"]
