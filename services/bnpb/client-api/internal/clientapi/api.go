@@ -42,6 +42,8 @@ var summaryFields = map[string]bool{
 	"area_name": true, "occurred_at": true, "ingested_at": true,
 }
 
+var sourceTypes = map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -89,71 +91,82 @@ func allowedFilters(raw string) (url.Values, string, error) {
 	out := url.Values{}
 	view := "summary"
 
-	allowed := map[string]bool{
-		"source":      true,
-		"hazard_type": true,
-		"severity":    true,
-		"since":       true,
-		"limit":       true,
-		"view":        true,
-		"cursor":      true,
-	}
 	for key, values := range parsed {
-		if !allowed[key] || len(values) != 1 {
+		if len(values) != 1 {
 			return nil, "", errors.New("invalid filter")
 		}
 
-		value := values[0]
-
-		switch key {
-		case "source":
-			if !validSource(value) {
-				return nil, "", errors.New("invalid source")
-			}
-		case "hazard_type":
-			if value != "SEISMIC" && value != "VOLCANIC" && value != "WILDFIRE" && value != "COASTAL" {
-				return nil, "", errors.New("invalid hazard type")
-			}
-		case "severity":
-			if value != "NORMAL" && value != "WASPADA" && value != "SIAGA" && value != "AWAS" {
-				return nil, "", errors.New("invalid severity")
-			}
-		case "since":
-			if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
-				return nil, "", errors.New("invalid since")
-			}
-		case "limit":
-			n, err := strconv.Atoi(value)
-			if err != nil || n < 1 || n > 500 {
-				return nil, "", errors.New("invalid limit")
-			}
-		case "view":
-			if value != "summary" && value != "raw" {
+		if key == "view" {
+			if values[0] != "summary" && values[0] != "raw" {
 				return nil, "", errors.New("invalid view")
 			}
 
-			view = value
+			view = values[0]
 
 			continue
-		case "cursor":
-			if len(value) > 4096 {
-				return nil, "", errors.New("invalid cursor")
-			}
 		}
 
-		out.Set(key, value)
+		if err = checkFilter(key, values[0]); err != nil {
+			return nil, "", err
+		}
+
+		out.Set(key, values[0])
 	}
 
-	types := map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
-	if source, kind := out.Get("source"), out.Get("hazard_type"); source != "" && kind != "" && types[source] != kind {
+	if source, kind := out.Get("source"), out.Get("hazard_type"); source != "" && kind != "" && sourceTypes[source] != kind {
 		return nil, "", errors.New("contradictory filters")
 	}
 
 	return out, view, nil
 }
 
+func checkFilter(key, value string) error {
+	switch key {
+	case "source":
+		if !validSource(value) {
+			return errors.New("invalid source")
+		}
+	case "hazard_type":
+		if !validHazardType(value) {
+			return errors.New("invalid hazard type")
+		}
+	case "severity":
+		if value != "NORMAL" && value != "WASPADA" && value != "SIAGA" && value != "AWAS" {
+			return errors.New("invalid severity")
+		}
+	case "since":
+		if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
+			return errors.New("invalid since")
+		}
+	case "limit":
+		if n, err := strconv.Atoi(value); err != nil || n < 1 || n > 500 {
+			return errors.New("invalid limit")
+		}
+	case "cursor":
+		if len(value) > 4096 {
+			return errors.New("invalid cursor")
+		}
+	default:
+		return errors.New("invalid filter")
+	}
+
+	return nil
+}
+
 func validSource(source string) bool {
-	return source == "BMKG" || source == "PVMBG" || source == "SATELIT" || source == "SENSOR_PANTAI"
+	_, ok := sourceTypes[source]
+
+	return ok
+}
+
+func validHazardType(hazardType string) bool {
+	for _, known := range sourceTypes {
+		if hazardType == known {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (a *API) outbound(
@@ -334,6 +347,31 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 		data = filtered
 	}
 
+	freshness, err := publicFreshness(sources)
+	if err != nil {
+		return nil, err
+	}
+
+	out := map[string]any{"data": data, "sources": freshness}
+
+	for _, key := range []string{"partial", "unavailable_units", "next_cursor"} {
+		raw, exists := envelope[key]
+		if !exists {
+			continue
+		}
+
+		if err = checkPageMarker(key, raw); err != nil {
+			return nil, err
+		}
+
+		out[key] = raw
+	}
+
+	return json.Marshal(out)
+}
+
+// publicFreshness keeps the source, status, and freshness times of each entry and drops the rest.
+func publicFreshness(sources json.RawMessage) ([]map[string]json.RawMessage, error) {
 	var freshness []map[string]json.RawMessage
 	if err := json.Unmarshal(sources, &freshness); err != nil {
 		return nil, err
@@ -361,36 +399,29 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 		}
 	}
 
-	out := map[string]any{"data": data, "sources": freshness}
+	return freshness, nil
+}
 
-	for _, key := range []string{"partial", "unavailable_units", "next_cursor"} {
-		raw, exists := envelope[key]
-		if !exists {
-			continue
+func checkPageMarker(key string, raw json.RawMessage) error {
+	switch key {
+	case "partial":
+		var value bool
+		if string(raw) == "null" || json.Unmarshal(raw, &value) != nil {
+			return errors.New("invalid partial marker")
 		}
-
-		switch key {
-		case "partial":
-			var value bool
-			if string(raw) == "null" || json.Unmarshal(raw, &value) != nil {
-				return nil, errors.New("invalid partial marker")
-			}
-		case "unavailable_units":
-			var value []string
-			if json.Unmarshal(raw, &value) != nil || len(value) > 128 {
-				return nil, errors.New("invalid unavailable units")
-			}
-		case "next_cursor":
-			var value *string
-			if json.Unmarshal(raw, &value) != nil || value != nil && len(*value) > 4096 {
-				return nil, errors.New("invalid next cursor")
-			}
+	case "unavailable_units":
+		var value []string
+		if json.Unmarshal(raw, &value) != nil || len(value) > 128 {
+			return errors.New("invalid unavailable units")
 		}
-
-		out[key] = raw
+	case "next_cursor":
+		var value *string
+		if json.Unmarshal(raw, &value) != nil || value != nil && len(*value) > 4096 {
+			return errors.New("invalid next cursor")
+		}
 	}
 
-	return json.Marshal(out)
+	return nil
 }
 
 func retryAfter(raw string, max time.Duration) string {
@@ -446,6 +477,11 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	a.relayHazards(w, resp, view)
+}
+
+// relayHazards turns an Aggregator answer into the public answer.
+func (a *API) relayHazards(w http.ResponseWriter, resp *http.Response, view string) {
 	if resp.StatusCode == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", retryAfter(resp.Header.Get("Retry-After"), a.Config.MaxRetryAfter))
 		writeError(w, http.StatusTooManyRequests, "capacity_exceeded")
