@@ -7,7 +7,8 @@ RUN CGO_ENABLED=0 go build -trimpath -o /aggregator ./cmd/aggregator \
  && CGO_ENABLED=0 go build -trimpath -o /data-tool ./cmd/data-tool
 
 FROM alpine:3.24
-RUN apk add --no-cache ca-certificates && adduser -D -u 10001 atlas
+RUN adduser -D -u 10001 atlas
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /aggregator /usr/local/bin/aggregator
 COPY --from=build /data-tool /usr/local/bin/data-tool
 USER atlas

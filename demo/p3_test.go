@@ -186,11 +186,13 @@ func checkNoCommittedSecrets(t *testing.T, ev map[string]any) {
 
 		return string(out)
 	}
+
 	if strings.TrimSpace(git("ls-files", ".env")) != "" {
 		t.Error(".env is committed")
 	}
 
 	examplePath := filepath.Join(s.root, ".env.example")
+
 	example, err := readEnv(examplePath)
 	if err != nil {
 		t.Fatal(err)
