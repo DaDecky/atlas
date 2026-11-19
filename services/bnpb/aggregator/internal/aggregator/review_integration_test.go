@@ -309,8 +309,8 @@ func TestDataIntegrationCopyWritesShareDeadline(t *testing.T) {
 	}
 
 	for _, holder := range table.Shards[shard] {
-		if copyState(t, c, shard, holder.Node) != "behind" {
-			t.Fatal("failed copy not marked", holder)
+		if copyState(t, c, shard, holder.Node) != "serving" {
+			t.Fatal("unacknowledged write removed a serving copy", holder)
 		}
 	}
 }

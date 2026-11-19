@@ -5,7 +5,41 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"atlas/services/bnpb/aggregator/internal/placement"
 )
+
+func TestDataIntegrationMarkBehindKeepsLastServingCopy(t *testing.T) {
+	cluster := dataCluster(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const source = "SATELIT"
+
+	shard := placement.Shard("metadata:" + source)
+
+	current, _, err := cluster.Placement.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, last := current.Shards[shard][0], current.Shards[shard][1]
+
+	request := BehindRequest{Source: source, Epoch: current.WriterEpochs[source], Shard: shard, Copy: first.Node, Generation: current.Generation}
+	if err = cluster.MarkBehind(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+
+	request.Copy, request.Generation = last.Node, current.Generation+1
+	if err = cluster.MarkBehind(ctx, request); err == nil {
+		t.Fatal("last serving copy was marked behind")
+	}
+
+	if state := copyState(t, cluster, shard, last.Node); state != "serving" {
+		t.Fatalf("last copy state is %q", state)
+	}
+}
 
 func TestDataIntegrationSourceTakeoverRejectsOldWrites(t *testing.T) {
 	cluster := dataCluster(t)

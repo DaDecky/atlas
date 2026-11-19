@@ -55,8 +55,9 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 	}
 
 	var (
-		changed  []HazardEvent
-		failures []error
+		changed      []HazardEvent
+		failures     []error
+		failedCopies []copyResult
 	)
 
 	succeeded, replay := 0, false
@@ -70,9 +71,7 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 			replay = true
 			succeeded++
 		case r.err != nil:
-			if err := c.markFailedCopy(ctx, shard, source, epoch, r.holder); err != nil {
-				failures = append(failures, err)
-			}
+			failedCopies = append(failedCopies, r)
 		default:
 			succeeded++
 
@@ -82,12 +81,23 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 		}
 	}
 
-	if len(failures) != 0 {
-		return nil, errors.Join(failures...)
+	// Only a confirmed write establishes a donor. An unacknowledged batch
+	// must not discard every copy of the last committed checkpoint.
+	if succeeded == 0 {
+		failures = append(failures, errors.New("no serving write copy available"))
+		for _, failed := range failedCopies {
+			failures = append(failures, failed.err)
+		}
+	} else {
+		for _, failed := range failedCopies {
+			if err := c.markFailedCopy(ctx, shard, source, epoch, failed.holder); err != nil {
+				failures = append(failures, err)
+			}
+		}
 	}
 
-	if succeeded == 0 {
-		return nil, errors.New("no serving write copy available")
+	if len(failures) != 0 {
+		return nil, errors.Join(failures...)
 	}
 
 	if replay && len(changed) == 0 {

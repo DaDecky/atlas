@@ -232,17 +232,23 @@ func (c *Cluster) MarkBehind(ctx context.Context, r BehindRequest) error {
 		return errors.New("unknown shard")
 	}
 
-	found := false
+	found, serving := false, false
 
 	for i := range copies {
 		if copies[i].Node == r.Copy {
 			copies[i].State = "behind"
 			found = true
+		} else if copies[i].State == "serving" {
+			serving = true
 		}
 	}
 
 	if !found {
 		return errors.New("unknown copy")
+	}
+
+	if !serving {
+		return errors.New("mark behind requires another serving copy")
 	}
 
 	table.Shards[r.Shard] = copies
