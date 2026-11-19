@@ -239,6 +239,8 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 		return nil, err
 	}
 
+	streams := map[string]sourceWork{"SATELIT": sat, "SENSOR_PANTAI": sensorWork(c, store, log)}
+
 	if cluster, ok := store.(*aggregator.Cluster); ok {
 		election, err := sourceElection(log)
 		if err != nil {
@@ -251,8 +253,10 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 			launch(func(ctx context.Context) { runSource(ctx, election, cluster, source, work, log) })
 		}
 
-		if sat != nil {
-			launch(func(ctx context.Context) { runSource(ctx, election, cluster, "SATELIT", sat, log) })
+		for source, work := range streams {
+			if work != nil {
+				launch(func(ctx context.Context) { runSource(ctx, election, cluster, source, work, log) })
+			}
 		}
 
 		return replay, nil
@@ -276,13 +280,17 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 		launch(func(ctx context.Context) { retrySourceParking(ctx, store, writer, poller, log) })
 	}
 
-	if sat != nil {
-		epoch, err := store.Epoch(ctx, "SATELIT")
+	for source, work := range streams {
+		if work == nil {
+			continue
+		}
+
+		epoch, err := store.Epoch(ctx, source)
 		if err != nil {
 			return nil, err
 		}
 
-		launch(func(ctx context.Context) { sat(ctx, epoch, nil) })
+		launch(func(ctx context.Context) { work(ctx, epoch, nil) })
 	}
 
 	return replay, nil

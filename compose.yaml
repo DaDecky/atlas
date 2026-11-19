@@ -89,6 +89,17 @@ services:
       bmkg-db: {condition: service_healthy}
     restart: unless-stopped
 
+  # The practice profile of the vendored manifest. The image is pinned and unmodified.
+  sensor-pantai:
+    image: sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d
+    environment:
+      PANTAI_PROFILE: practice
+      PANTAI_SEED: '42'
+      PANTAI_SPEED: '60'
+      PANTAI_AUTH_TOKEN: ${PANTAI_AUTH_TOKEN:?run make env}
+    networks: [sources]
+    restart: unless-stopped
+
   pvmbg-db:
     image: postgres:18.3-alpine
     environment:
@@ -148,6 +159,11 @@ services:
       WARNING_LOOKBACK: ${WARNING_LOOKBACK:-}
       MAX_SOURCE_RECORDS: ${MAX_SOURCE_RECORDS:-}
       MAX_SOURCE_BYTES: ${MAX_SOURCE_BYTES:-}
+      SENSOR_PANTAI_URL: http://sensor-pantai:8080
+      PANTAI_AUTH_TOKEN: ${PANTAI_AUTH_TOKEN:?run make env}
+      SENSOR_POLL_INTERVAL: ${SENSOR_POLL_INTERVAL:-}
+      SENSOR_TIMEOUT: ${SENSOR_TIMEOUT:-}
+      SENSOR_STALE_AFTER: ${SENSOR_STALE_AFTER:-}
       <<: [*http, *db, *broker]
       SOURCE_SCHEMA_POLICY_FILE: /etc/atlas/schema/policy.json
     configs:

@@ -14,7 +14,7 @@ rules:
     verbs: [get, update, watch]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
-    resourceNames: [canonical-placement-recovery, aggregator-bmkg, aggregator-pvmbg, aggregator-satelit]
+    resourceNames: [canonical-placement-recovery, aggregator-bmkg, aggregator-pvmbg, aggregator-satelit, aggregator-sensor-pantai]
     verbs: [get, update]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]

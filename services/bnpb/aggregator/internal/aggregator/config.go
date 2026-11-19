@@ -18,6 +18,8 @@ type Config struct {
 	HTTPReadHeaderTimeout, HTTPReadTimeout, HTTPIdleTimeout, StartupTimeout, ShutdownTimeout time.Duration
 	DBConnectTimeout, SourceIdleConnTimeout, FailureMarkTimeout, WarningLookback             time.Duration
 	BrokerHeartbeat                                                                          time.Duration
+	SensorURL, SensorToken                                                                   string
+	SensorInterval, SensorTimeout, SensorStaleAfter                                          time.Duration
 	HTTPMaxHeaderBytes, MaxSourceRecords, MaxSourceBytes                                     int
 }
 
@@ -50,6 +52,11 @@ const (
 	defaultBrokerHeartbeat       = 10 * time.Second
 	defaultMaxSourceRecords      = 1000
 	defaultMaxSourceBytes        = 4 << 20
+	// One poll per second keeps the critical alert budget of 5 s at the 95th percentile.
+	defaultSensorInterval = time.Second
+	defaultSensorTimeout  = 2 * time.Second
+	// A newest reading 5 minutes behind generated_at is expired data.
+	defaultSensorStaleAfter = 5 * time.Minute
 )
 
 func ConfigFromEnv() (Config, error) {
@@ -62,6 +69,8 @@ func ConfigFromEnv() (Config, error) {
 		PVMBGToken:    os.Getenv("PVMBG_TOKEN"),
 		InternalToken: os.Getenv("AGGREGATOR_INTERNAL_TOKEN"),
 		Address:       os.Getenv("HTTP_ADDR"),
+		SensorURL:     os.Getenv("SENSOR_PANTAI_URL"),
+		SensorToken:   os.Getenv("PANTAI_AUTH_TOKEN"),
 	}
 	for _, v := range []string{
 		c.DatabaseURL,
@@ -77,7 +86,12 @@ func ConfigFromEnv() (Config, error) {
 		}
 	}
 
-	for _, raw := range []string{c.BMKGURL, c.PVMBGURL} {
+	origins := []string{c.BMKGURL, c.PVMBGURL}
+	if c.SensorURL != "" {
+		origins = append(origins, c.SensorURL)
+	}
+
+	for _, raw := range origins {
 		u, err := url.Parse(raw)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil ||
 			u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
@@ -87,6 +101,10 @@ func ConfigFromEnv() (Config, error) {
 
 	if c.BMKGKey == c.PVMBGToken || c.InternalToken == c.BMKGKey || c.InternalToken == c.PVMBGToken {
 		return c, errors.New("credentials must be independent")
+	}
+
+	if c.SensorURL != "" && c.SensorToken == "" {
+		return c, errors.New("PANTAI_AUTH_TOKEN is required with SENSOR_PANTAI_URL")
 	}
 
 	if c.Address == "" {
@@ -118,6 +136,9 @@ func ConfigFromEnv() (Config, error) {
 		{"FAILURE_MARK_TIMEOUT", defaultFailureMarkTimeout, 100 * time.Millisecond, time.Minute, &c.FailureMarkTimeout},
 		{"WARNING_LOOKBACK", defaultWarningLookback, time.Minute, 24 * time.Hour, &c.WarningLookback},
 		{"BROKER_HEARTBEAT", defaultBrokerHeartbeat, time.Second, 5 * time.Minute, &c.BrokerHeartbeat},
+		{"SENSOR_POLL_INTERVAL", defaultSensorInterval, 100 * time.Millisecond, time.Minute, &c.SensorInterval},
+		{"SENSOR_TIMEOUT", defaultSensorTimeout, 100 * time.Millisecond, time.Minute, &c.SensorTimeout},
+		{"SENSOR_STALE_AFTER", defaultSensorStaleAfter, time.Second, 24 * time.Hour, &c.SensorStaleAfter},
 	}
 	for _, d := range durations {
 		if *d.dest, err = envDuration(d.key, d.fallback, d.min, d.max); err != nil {

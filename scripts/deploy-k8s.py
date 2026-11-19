@@ -172,10 +172,10 @@ def main():
     config("auth-config", {"ACCESS_TOKEN_TTL": values.get("ACCESS_TOKEN_TTL", "")})
     auth["AUTH_DATABASE_URL"] = db("auth", values["AUTH_DB_PASSWORD"], "auth-db", "auth")
     secret("auth-credentials", auth)
-    aggregator = selected("BMKG_API_KEY", "PVMBG_TOKEN", "AGGREGATOR_INTERNAL_TOKEN", "AUDIT_TOKEN")
+    aggregator = selected("BMKG_API_KEY", "PVMBG_TOKEN", "AGGREGATOR_INTERNAL_TOKEN", "AUDIT_TOKEN", "PANTAI_AUTH_TOKEN")
     aggregator.update(DATABASE_URL=db("aggregator", values["CANONICAL_DB_PASSWORD"], "canonical-store-0.canonical-store", "canonical"), RABBITMQ_URL=broker)
-    settings = {"POLL_INTERVAL": values.get("POLL_INTERVAL", ""), "BMKG_BASE_URL": "http://bmkg:8081", "PVMBG_BASE_URL": "http://pvmbg:8082"}
-    for name in ["SOURCE_LEASE_DURATION", "SOURCE_LEASE_RENEW_DEADLINE", "SOURCE_LEASE_RETRY_PERIOD"]:
+    settings = {"POLL_INTERVAL": values.get("POLL_INTERVAL", ""), "BMKG_BASE_URL": "http://bmkg:8081", "PVMBG_BASE_URL": "http://pvmbg:8082", "SENSOR_PANTAI_URL": "http://sensor-pantai:8080"}
+    for name in ["SOURCE_LEASE_DURATION", "SOURCE_LEASE_RENEW_DEADLINE", "SOURCE_LEASE_RETRY_PERIOD", "SENSOR_POLL_INTERVAL", "SENSOR_TIMEOUT", "SENSOR_STALE_AFTER"]:
         if values.get(name):
             settings[name] = values[name]
     config("aggregator-config", settings)
