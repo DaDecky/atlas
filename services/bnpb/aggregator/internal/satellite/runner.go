@@ -100,6 +100,7 @@ func (r *Runner) connection(ctx context.Context) error {
 
 	req.Header.Set("Authorization", "Bearer "+r.Token)
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("User-Agent", "Atlas-IF4031/1.0")
 
 	if hasPosition {
 		req.Header.Set("Last-Event-ID", strconv.FormatInt(position, 10))

@@ -42,6 +42,75 @@ func TestFeedDecoderRejectsMissingIdentityAndInvalidDepth(t *testing.T) {
 	}
 }
 
+func TestPracticeFeedCorrectionsResolveCanonicalIdentity(t *testing.T) {
+	engine := New()
+	records := []struct {
+		kind, body string
+	}{
+		{"detection", `{"offset":0,"detection":{"satellite":"N20","acq_date":"2026-11-18","acq_time":4,"latitude":-6,"longitude":106,"confidence":"n","frp":4}}`},
+		{"detection", `{"offset":1,"detection":{"satellite":"N21","acq_date":"2026-11-18","acq_time":4,"latitude":-6,"longitude":106.001,"confidence":"n","frp":6}}`},
+		{"update", `{"offset":2,"key":"N20|2026-11-18|4|-6|106","changes":{"confidence":"h","frp":11,"bright_ti4":310.2}}`},
+		{"retract", `{"offset":3,"key":"N20|2026-11-18|4|-6|106","reason":"correction"}`},
+	}
+
+	// Rebuild from durable state between a detection and its correction.
+	var id string
+
+	for offset, record := range records {
+		if offset == 2 {
+			snapshot, err := engine.Snapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			engine, err = Restore(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		frame, err := DecodeFeed(SSEEvent{Type: record.kind, Offset: int64(offset), Data: []byte(record.body)})
+		if err != nil {
+			t.Fatal(offset, err)
+		}
+
+		fires, err := engine.Apply(frame)
+		if err != nil {
+			t.Fatal(offset, err)
+		}
+
+		switch offset {
+		case 1:
+			if len(fires) != 1 || fires[0].TotalFRP != 10 {
+				t.Fatal("initial fire", fires)
+			}
+
+			id = fires[0].ID
+		case 2:
+			if len(fires) != 1 || fires[0].ID != id || fires[0].TotalFRP != 17 || fires[0].HighestConfidence != "high" {
+				t.Fatal("partial update did not preserve identity and apply changed fields", fires)
+			}
+		case 3:
+			if len(fires) != 1 || fires[0].ID != id || fires[0].Status != "withdrawn" {
+				t.Fatal("retract did not withdraw the same fire", fires)
+			}
+		}
+	}
+}
+
+func TestPracticeFeedRejectsInvalidCorrections(t *testing.T) {
+	for _, body := range []string{
+		`{"offset":2,"key":"N20|2026-11-18|4|-6|106","changes":{"frp":null}}`,
+		`{"offset":2,"key":"N20|2026-11-18|4|-6|106","changes":{"latitude":-7}}`,
+		`{"offset":2,"key":"N20|2026-11-18|1260|-6|106","changes":{"frp":11}}`,
+		`{"offset":99,"key":"N20|2026-11-18|4|-6|106","changes":{"frp":11}}`,
+	} {
+		if _, err := DecodeFeed(SSEEvent{Type: "update", Offset: 2, Data: []byte(body)}); err == nil {
+			t.Fatal("invalid correction accepted", body)
+		}
+	}
+}
+
 func TestReferenceUsesNearestCentreAndStableTies(t *testing.T) {
 	ref, err := LoadReference("")
 	if err != nil || len(ref.Provinces) != 34 || ref.Version == "" {

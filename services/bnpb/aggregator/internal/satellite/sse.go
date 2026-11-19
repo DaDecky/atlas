@@ -96,10 +96,8 @@ func ReadSSE(ctx context.Context, reader io.Reader, emit func(SSEEvent) error) e
 	return io.EOF
 }
 
-// DecodeFeed is the explicit supported wire contract. Detection/update payloads
-// may be a record or {"detection": record}; a retract carries that identity's
-// key or its five identity fields. Numeric HHMM and VIIRS l/n/h values are
-// normalized. A live group-token probe must confirm the assistants' payload.
+// DecodeFeed accepts detection records and keyed corrections. The practice feed
+// wraps detections and sends updates as field changes rather than full records.
 func DecodeFeed(event SSEEvent) (Frame, error) {
 	frame := Frame{Offset: event.Offset, Type: event.Type, Raw: append(json.RawMessage(nil), event.Data...)}
 
@@ -122,6 +120,29 @@ func DecodeFeed(event SSEEvent) (Frame, error) {
 		return frame, nil
 	}
 
+	if raw, exists := object["offset"]; exists {
+		var offset int64
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) || json.Unmarshal(raw, &offset) != nil || offset != event.Offset {
+			return frame, errors.New("SSE offset and payload offset disagree")
+		}
+	}
+
+	if changes, exists := object["changes"]; event.Type == "update" && exists {
+		key, err := decodeFeedKey(object["key"])
+		if err != nil || object["detection"] != nil {
+			return frame, errors.New("invalid partial update identity")
+		}
+
+		patch, err := decodeFeedPatch(changes)
+		if err != nil {
+			return frame, err
+		}
+
+		frame.Key, frame.Changes = key, &patch
+
+		return frame, nil
+	}
+
 	if nested, exists := object["detection"]; exists {
 		if json.Unmarshal(nested, &object) != nil || object == nil {
 			return frame, errors.New("invalid nested detection")
@@ -129,11 +150,8 @@ func DecodeFeed(event SSEEvent) (Frame, error) {
 	}
 
 	if event.Type == "retract" && object["key"] != nil {
-		if json.Unmarshal(object["key"], &frame.Key) != nil || frame.Key == "" {
-			return frame, errors.New("invalid retract key")
-		}
-
-		return frame, nil
+		frame.Key, err = decodeFeedKey(object["key"])
+		return frame, err
 	}
 
 	required := []string{"satellite", "acq_date", "acq_time", "latitude", "longitude"}
@@ -163,14 +181,7 @@ func DecodeFeed(event SSEEvent) (Frame, error) {
 		return frame, errors.New("invalid detection types")
 	}
 
-	switch d.Confidence {
-	case "l":
-		d.Confidence = "low"
-	case "n":
-		d.Confidence = "nominal"
-	case "h":
-		d.Confidence = "high"
-	}
+	d.Confidence = normalizeConfidence(d.Confidence)
 
 	if event.Type == "retract" {
 		// Retract identity records need no measurements.
@@ -185,4 +196,96 @@ func DecodeFeed(event SSEEvent) (Frame, error) {
 	}
 
 	return frame, nil
+}
+
+func normalizeConfidence(value string) string {
+	switch value {
+	case "l":
+		return "low"
+	case "n":
+		return "nominal"
+	case "h":
+		return "high"
+	default:
+		return value
+	}
+}
+
+// Feed correction keys encode the same identity as Detection.Key, with pipe
+// delimiters and numeric HHMM rather than four-character time strings.
+func decodeFeedKey(raw json.RawMessage) (string, error) {
+	var value string
+	if json.Unmarshal(raw, &value) != nil || value == "" || len(value) > 512 {
+		return "", errors.New("invalid correction key")
+	}
+
+	if strings.HasPrefix(value, "[") {
+		var parts []string
+		if json.Unmarshal([]byte(value), &parts) != nil || len(parts) != 5 {
+			return "", errors.New("invalid canonical correction key")
+		}
+
+		return detectionIdentity(parts)
+	}
+
+	return detectionIdentity(strings.Split(value, "|"))
+}
+
+func detectionIdentity(parts []string) (string, error) {
+	if len(parts) != 5 {
+		return "", errors.New("correction key requires five identity fields")
+	}
+
+	hhmm, timeErr := strconv.Atoi(parts[2])
+
+	lat, latErr := strconv.ParseFloat(parts[3], 64)
+	lon, lonErr := strconv.ParseFloat(parts[4], 64)
+
+	if timeErr != nil || hhmm < 0 || hhmm > 2359 || latErr != nil || lonErr != nil {
+		return "", errors.New("invalid correction key identity")
+	}
+
+	d := Detection{Satellite: parts[0], AcqDate: parts[1], AcqTime: fmt.Sprintf("%04d", hhmm), Latitude: lat, Longitude: lon, Confidence: "nominal"}
+	if err := d.Validate(); err != nil {
+		return "", err
+	}
+
+	return d.Key(), nil
+}
+
+func decodeFeedPatch(raw json.RawMessage) (DetectionPatch, error) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields) == 0 {
+		return DetectionPatch{}, errors.New("update changes must be a nonempty object")
+	}
+
+	var patch DetectionPatch
+
+	for key, value := range fields {
+		switch key {
+		case "satellite", "acq_date", "acq_time", "latitude", "longitude":
+			return patch, errors.New("partial update changes detection identity")
+		case "confidence":
+			var confidence string
+			if json.Unmarshal(value, &confidence) != nil || confidence == "" {
+				return patch, errors.New("invalid updated confidence")
+			}
+
+			normalized := normalizeConfidence(confidence)
+			if normalized != "low" && normalized != "nominal" && normalized != "high" {
+				return patch, errors.New("invalid updated confidence")
+			}
+
+			patch.Confidence = &normalized
+		case "frp":
+			var frp float64
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) || json.Unmarshal(value, &frp) != nil || frp < 0 {
+				return patch, errors.New("invalid updated FRP")
+			}
+
+			patch.FRP = &frp
+		}
+	}
+
+	return patch, nil
 }

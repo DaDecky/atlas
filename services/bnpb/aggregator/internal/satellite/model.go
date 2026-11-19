@@ -26,8 +26,14 @@ type Frame struct {
 	Offset    int64           `json:"offset"`
 	Type      string          `json:"type"`
 	Detection *Detection      `json:"detection,omitempty"`
+	Changes   *DetectionPatch `json:"changes,omitempty"`
 	Key       string          `json:"key,omitempty"`
 	Raw       json.RawMessage `json:"raw,omitempty"`
+}
+
+type DetectionPatch struct {
+	Confidence *string  `json:"confidence,omitempty"`
+	FRP        *float64 `json:"frp,omitempty"`
 }
 
 type Record struct {

@@ -175,6 +175,24 @@ func (e *Engine) Apply(frame Frame) ([]Fire, error) {
 	}
 
 	key := frame.Key
+	if frame.Type == "update" && frame.Changes != nil {
+		previous, exists := e.state.Records[key]
+		if !exists || frame.Detection != nil {
+			return nil, errors.New("partial update requires a stored detection")
+		}
+
+		detection := previous.Detection
+		if frame.Changes.Confidence != nil {
+			detection.Confidence = *frame.Changes.Confidence
+		}
+
+		if frame.Changes.FRP != nil {
+			detection.FRP = *frame.Changes.FRP
+		}
+
+		frame.Detection = &detection
+	}
+
 	switch frame.Type {
 	case "detection", "update":
 		if frame.Detection == nil || frame.Detection.Validate() != nil {
