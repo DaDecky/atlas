@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"atlas/services/bnpb/aggregator/internal/aggregator"
+	"atlas/services/bnpb/aggregator/internal/leadership"
 	"atlas/services/bnpb/aggregator/internal/lease"
 )
 
-type sourceGuard func(context.Context) error
-
-type sourceWork func(context.Context, int64, sourceGuard)
+// leaseLeader adapts the client-go lease elector to the leadership package.
+type leaseLeader struct{ elector *lease.Elector }
 
 func sourceElection(c aggregator.Config, log *slog.Logger) (*lease.Elector, error) {
 	raw, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -29,87 +29,13 @@ func sourceElection(c aggregator.Config, log *slog.Logger) (*lease.Elector, erro
 	return lease.NewInCluster(strings.TrimSpace(string(raw)), timing, log)
 }
 
-func runSource(ctx context.Context, election *lease.Elector, store *aggregator.Cluster, source string, work sourceWork, log *slog.Logger) {
-	for ctx.Err() == nil {
-		err := runSourceTerm(ctx, election, store, source, work, log)
-		if err != nil && ctx.Err() == nil {
-			log.Warn("source_term_ended", "source", source, "reason", err.Error())
-		}
-
-		if !waitSourceRetry(ctx) {
-			return
-		}
-	}
-}
-
-func runSourceTerm(ctx context.Context, election *lease.Elector, store *aggregator.Cluster, source string, work sourceWork, log *slog.Logger) error {
-	term, err := election.Lead(ctx, source)
+func (l leaseLeader) Lead(ctx context.Context, source string) (leadership.Term, error) {
+	term, err := l.elector.Lead(ctx, source)
 	if err != nil {
-		return err
-	}
-	defer term.Release()
-
-	lifetime, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	guard := func(call context.Context) error {
-		if err := lifetime.Err(); err != nil {
-			return err
-		}
-
-		check, done := context.WithTimeout(call, 2*time.Second)
-		defer done()
-
-		if err := term.Check(check); err != nil {
-			cancel()
-			return err
-		}
-
-		return nil
+		return nil, err
 	}
 
-	bootstrap, stop := context.WithTimeout(lifetime, 8*time.Second)
-	defer stop()
-
-	if err = guard(bootstrap); err != nil {
-		return err
-	}
-
-	epoch, err := store.AcquireWriterEpoch(bootstrap, source)
-	if err != nil {
-		return err
-	}
-
-	if err = guard(bootstrap); err != nil {
-		return err
-	}
-
-	log.Info("source_writer_ready", "source", source, "epoch", epoch)
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-lifetime.Done():
-				return
-			case <-ticker.C:
-				if err := guard(lifetime); err != nil {
-					return
-				}
-			}
-		}
-	}()
-
-	work(lifetime, epoch, guard)
-	cancel()
-	<-done
-
-	return nil
+	return term, nil
 }
 
 func waitSourceRetry(ctx context.Context) bool {
@@ -124,7 +50,7 @@ func waitSourceRetry(ctx context.Context) bool {
 	}
 }
 
-func sourcePoller(c aggregator.Config, source string, writer *aggregator.EpochIngest, guard sourceGuard, log *slog.Logger) (*aggregator.Poller, func()) {
+func sourcePoller(c aggregator.Config, source string, writer *aggregator.EpochIngest, guard leadership.Guard, log *slog.Logger) (*aggregator.Poller, func()) {
 	base, key := c.BMKGURL, c.BMKGKey
 	if source == "PVMBG" {
 		base, key = c.PVMBGURL, c.PVMBGToken
@@ -151,7 +77,7 @@ func sourcePoller(c aggregator.Config, source string, writer *aggregator.EpochIn
 	}, transport.CloseIdleConnections
 }
 
-func replaySource(store runtimeData, writer *aggregator.EpochIngest, poller *aggregator.Poller, guard sourceGuard) aggregator.ReplaySource {
+func replaySource(store runtimeData, writer *aggregator.EpochIngest, poller *aggregator.Poller, guard leadership.Guard) aggregator.ReplaySource {
 	return func(ctx context.Context, limit int, reason string) (int, error) {
 		if guard != nil {
 			if err := guard(ctx); err != nil {
@@ -173,8 +99,8 @@ func retrySourceParking(ctx context.Context, store runtimeData, writer *aggregat
 		func(err error) { log.Warn("parking_retry_failed", "source", writer.Source, "reason", err.Error()) })
 }
 
-func sourcePollWork(c aggregator.Config, store runtimeData, source string, log *slog.Logger) sourceWork {
-	return func(ctx context.Context, epoch int64, guard sourceGuard) {
+func sourcePollWork(c aggregator.Config, store runtimeData, source string, log *slog.Logger) leadership.Work {
+	return func(ctx context.Context, epoch int64, guard leadership.Guard) {
 		writer := &aggregator.EpochIngest{Data: store, Source: source, WriterEpoch: epoch}
 
 		poller, closeIdle := sourcePoller(c, source, writer, guard, log)
@@ -223,7 +149,7 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 		return nil, err
 	}
 
-	streams := map[string]sourceWork{aggregator.SourceSatellite: sat, aggregator.SourceSensorPantai: sensorWork(c, store, log)}
+	streams := map[string]leadership.Work{aggregator.SourceSatellite: sat, aggregator.SourceSensorPantai: sensorWork(c, store, log)}
 
 	if cluster, ok := store.(*aggregator.Cluster); ok {
 		election, err := sourceElection(c, log)
@@ -231,15 +157,17 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 			return nil, err
 		}
 
+		runner := leadership.NewRunner(leaseLeader{election}, cluster, log)
+
 		for _, source := range []string{"BMKG", "PVMBG"} {
 			work := sourcePollWork(c, store, source, log)
 
-			launch(func(ctx context.Context) { runSource(ctx, election, cluster, source, work, log) })
+			launch(func(ctx context.Context) { runner.Run(ctx, source, work) })
 		}
 
 		for source, work := range streams {
 			if work != nil {
-				launch(func(ctx context.Context) { runSource(ctx, election, cluster, source, work, log) })
+				launch(func(ctx context.Context) { runner.Run(ctx, source, work) })
 			}
 		}
 

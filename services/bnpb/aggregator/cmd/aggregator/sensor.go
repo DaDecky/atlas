@@ -6,18 +6,19 @@ import (
 	"net/http"
 
 	"atlas/services/bnpb/aggregator/internal/aggregator"
+	"atlas/services/bnpb/aggregator/internal/leadership"
 	"atlas/services/bnpb/aggregator/internal/sensor"
 )
 
 // sensorWork gives the sensor its own transport with one connection, so a slow sensor
 // cannot hold the connections or the deadline of another source.
-func sensorWork(c aggregator.Config, store runtimeData, log *slog.Logger) sourceWork {
+func sensorWork(c aggregator.Config, store runtimeData, log *slog.Logger) leadership.Work {
 	if c.SensorURL == "" {
 		log.Info("sensor_disabled", "reason", "SENSOR_PANTAI_URL not configured")
 		return nil
 	}
 
-	return func(ctx context.Context, epoch int64, guard sourceGuard) {
+	return func(ctx context.Context, epoch int64, guard leadership.Guard) {
 		transport := &http.Transport{
 			MaxConnsPerHost: 1, MaxIdleConnsPerHost: 1,
 			IdleConnTimeout: c.SourceIdleConnTimeout, ResponseHeaderTimeout: c.SensorTimeout,
