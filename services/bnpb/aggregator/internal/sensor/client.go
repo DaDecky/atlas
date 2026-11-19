@@ -42,7 +42,7 @@ func (e *ContractError) Error() string { return "sensor contract violation: " + 
 
 func NewClient(origin, token string, client *http.Client, timeout time.Duration, onChange func(from, to string)) *Client {
 	settings := gobreaker.Settings{
-		Name:        "SENSOR_PANTAI",
+		Name:        "sensor-pantai",
 		MaxRequests: 1,
 		Timeout:     probeDelay,
 		ReadyToTrip: func(counts gobreaker.Counts) bool { return counts.ConsecutiveFailures >= tripAfter },

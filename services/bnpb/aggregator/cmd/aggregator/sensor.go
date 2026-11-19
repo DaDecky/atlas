@@ -25,13 +25,13 @@ func sensorWork(c aggregator.Config, store runtimeData, log *slog.Logger) source
 		defer transport.CloseIdleConnections()
 
 		onChange := func(from, to string) {
-			log.Warn("sensor_breaker", "source", "SENSOR_PANTAI", "from", from, "to", to)
+			log.Warn("sensor_breaker", "source", aggregator.SensorSource, "from", from, "to", to)
 		}
 		client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 		poller := &aggregator.SensorPoller{
 			Client:   sensor.NewClient(c.SensorURL, c.SensorToken, client, c.SensorTimeout, onChange),
-			Ingest:   &aggregator.EpochIngest{Data: store, Source: "SENSOR_PANTAI", WriterEpoch: epoch},
+			Ingest:   &aggregator.EpochIngest{Data: store, Source: aggregator.SensorSource, WriterEpoch: epoch},
 			Interval: c.SensorInterval, StaleAfter: c.SensorStaleAfter, Guard: guard, Log: log,
 		}
 		poller.Run(ctx)

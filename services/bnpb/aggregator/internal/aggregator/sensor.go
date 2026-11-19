@@ -32,10 +32,10 @@ type sensorState struct {
 	Last   sensor.Position `json:"last"`
 }
 
-const (
-	sensorSource    = "SENSOR_PANTAI"
-	sensorPageLimit = 100
-)
+// SensorSource is the source name of the Sensor Pantai.
+const SensorSource = "SENSOR_PANTAI"
+
+const sensorPageLimit = 100
 
 // Lampiran C gives no severity rule, so this team rule ranks the size of the sea level
 // anomaly, either sign, and the wave height. The sensor's own critical flag means AWAS.
@@ -127,7 +127,7 @@ func (p *SensorPoller) Poll(ctx context.Context, id string) (bool, error) {
 func (p *SensorPoller) load(ctx context.Context) (sensorState, int64, error) {
 	var state sensorState
 
-	stored, err := p.Ingest.Data.LoadState(ctx, sensorSource)
+	stored, err := p.Ingest.Data.LoadState(ctx, SensorSource)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return state, 0, nil
 	}
@@ -217,7 +217,7 @@ func coastalEvent(o sensor.Observation, station sensor.Station, received time.Ti
 	}
 
 	return HazardEvent{
-		HazardID: CanonicalHazardID(sensorSource, o.ID), Source: sensorSource, SourceRefID: o.ID, HazardType: "COASTAL",
+		HazardID: CanonicalHazardID(SensorSource, o.ID), Source: SensorSource, SourceRefID: o.ID, HazardType: "COASTAL",
 		Severity: CoastalSeverity(o), AreaName: station.Name, Latitude: station.Latitude, Longitude: station.Longitude,
 		OccurredAt: o.ObservedAt, IngestedAt: received, Attributes: attributes, Revision: 1,
 	}
@@ -235,7 +235,7 @@ func (p *SensorPoller) commit(ctx context.Context, events []HazardEvent, offset 
 		return fmt.Errorf("encode sensor state: %w", err)
 	}
 
-	batch := WriteBatch{Source: sensorSource, Epoch: p.Ingest.WriterEpoch, Events: events, Now: now}
+	batch := WriteBatch{Source: SensorSource, Epoch: p.Ingest.WriterEpoch, Events: events, Now: now}
 	if _, err = p.Ingest.Data.CommitState(ctx, batch, StreamState{Offset: offset + 1, Payload: payload}); err != nil {
 		return fmt.Errorf("commit sensor page: %w", err)
 	}
@@ -245,15 +245,15 @@ func (p *SensorPoller) commit(ctx context.Context, events []HazardEvent, offset 
 
 // report marks the source stale when the data looks sick, whatever /healthz says.
 func (p *SensorPoller) report(ctx context.Context, id string, health sensor.Health, stored, parked int, now time.Time) {
-	p.Log.Info("sensor_committed", "source", sensorSource, "correlation_id", id, "stored", stored, "parked", parked,
+	p.Log.Info("sensor_committed", "source", SensorSource, "correlation_id", id, "stored", stored, "parked", parked,
 		"stale", health.Stale, "repeated", health.Repeated, "out_of_order", health.OutOfOrder)
 
 	if !health.Degraded() {
 		return
 	}
 
-	if err := p.Ingest.Failure(ctx, sensorSource, now); err != nil {
-		p.Log.Warn("sensor_degraded_mark_failed", "source", sensorSource, "correlation_id", id, "reason", err.Error())
+	if err := p.Ingest.Failure(ctx, SensorSource, now); err != nil {
+		p.Log.Warn("sensor_degraded_mark_failed", "source", SensorSource, "correlation_id", id, "reason", err.Error())
 	}
 }
 
@@ -261,28 +261,28 @@ func (p *SensorPoller) fail(ctx context.Context, id string, err error) {
 	var contract *sensor.ContractError
 	if errors.As(err, &contract) {
 		if parkErr := p.park(ctx, id, contract.Raw, "", contract.Reason, time.Now().UTC()); parkErr != nil {
-			p.Log.Warn("sensor_park_failed", "source", sensorSource, "correlation_id", id, "reason", parkErr.Error())
+			p.Log.Warn("sensor_park_failed", "source", SensorSource, "correlation_id", id, "reason", parkErr.Error())
 		}
 	}
 
 	markCtx, cancel := context.WithTimeout(ctx, defaultFailureMarkTimeout)
 	defer cancel()
 
-	markErr := p.Ingest.Failure(markCtx, sensorSource, time.Now().UTC())
+	markErr := p.Ingest.Failure(markCtx, SensorSource, time.Now().UTC())
 
 	// While the breaker is open every poll fails the same way, and the state change was logged once.
 	if !errors.Is(err, sensor.ErrOpen) {
-		p.Log.Warn("poll_failed", "source", sensorSource, "correlation_id", id, "reason", err.Error(), "freshness_saved", markErr == nil)
+		p.Log.Warn("poll_failed", "source", SensorSource, "correlation_id", id, "reason", err.Error(), "freshness_saved", markErr == nil)
 	}
 }
 
 // park sets a record aside without retry, because a contract violation does not heal on replay.
 func (p *SensorPoller) park(ctx context.Context, id string, raw []byte, ref, reason string, received time.Time) error {
 	digest := sha256.Sum256(raw)
-	identity := sha256.Sum256([]byte(sensorSource + "\x00" + hex.EncodeToString(digest[:])))
+	identity := sha256.Sum256([]byte(SensorSource + "\x00" + hex.EncodeToString(digest[:])))
 
 	return p.Ingest.Park(ctx, ParkedMessage{
-		MessageID: hex.EncodeToString(identity[:]), Source: sensorSource, SourceRefID: ref, Raw: raw,
+		MessageID: hex.EncodeToString(identity[:]), Source: SensorSource, SourceRefID: ref, Raw: raw,
 		ReasonCode: "contract_violation", Reason: reason, ReceivedAt: received, CorrelationID: id,
 	})
 }
