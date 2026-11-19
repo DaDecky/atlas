@@ -13,13 +13,22 @@ import (
 )
 
 // Ingestion and reads have separate pools so polling cannot consume read capacity.
-type Store struct{ ingest, query *pgxpool.Pool }
+type Store struct {
+	ingest, query *pgxpool.Pool
+	coordination  *pgxpool.Pool
+	namespace     string
+	storeID       string
+	deadline      time.Duration
+}
 
 const columns = `hazard_id, source, source_ref_id, hazard_type, severity, area_name,
 	latitude, longitude, occurred_at, ingested_at, attributes, revision`
 
 //go:embed schema.sql
 var schema string
+
+//go:embed m2_schema.sql
+var m2Schema string
 
 func openPool(ctx context.Context, url string, size int32, connectTimeout time.Duration) (*pgxpool.Pool, error) {
 	c, err := pgxpool.ParseConfig(url)
@@ -28,6 +37,7 @@ func openPool(ctx context.Context, url string, size int32, connectTimeout time.D
 	}
 
 	c.MaxConns = size
+	c.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	c.ConnConfig.ConnectTimeout = connectTimeout
 
 	p, err := pgxpool.NewWithConfig(ctx, c)
@@ -55,8 +65,13 @@ func OpenStore(ctx context.Context, url string, ingestSize, querySize int32, con
 		return nil, err
 	}
 
-	s := &Store{i, q}
+	s := &Store{ingest: i, query: q}
 	if _, err = i.Exec(ctx, schema); err != nil {
+		s.Close()
+		return nil, err
+	}
+
+	if _, err = i.Exec(ctx, m2Schema); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -71,6 +86,10 @@ func OpenStore(ctx context.Context, url string, ingestSize, querySize int32, con
 }
 
 func (s *Store) Close() {
+	if s.coordination != nil {
+		s.coordination.Close()
+	}
+
 	s.ingest.Close()
 	s.query.Close()
 }
@@ -80,9 +99,17 @@ func (s *Store) Health(ctx context.Context) error { return s.query.Ping(ctx) }
 func (s *Store) Checkpoint(ctx context.Context, source string) (*time.Time, error) {
 	var t *time.Time
 
-	err := s.ingest.QueryRow(ctx, `SELECT checkpoint FROM source_progress WHERE source = $1`, source).Scan(&t)
+	tx, err := s.begin(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
 
-	return t, err
+	if err = tx.QueryRow(ctx, `SELECT checkpoint FROM source_progress WHERE source = $1`, source).Scan(&t); err != nil {
+		return nil, err
+	}
+
+	return t, tx.Commit(ctx)
 }
 
 func (s *Store) Failure(ctx context.Context, source string, now time.Time) error {
@@ -149,15 +176,38 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 	[]HazardEvent,
 	error,
 ) {
-	tx, err := s.ingest.Begin(ctx)
+	tx, err := s.begin(ctx, false)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
+	changed, err := saveEvents(ctx, tx, source, events, checkpoint, now)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	return changed, nil
+}
+
+func saveEvents(ctx context.Context, tx pgx.Tx, source string, events []HazardEvent, checkpoint *time.Time, now time.Time, assigned ...bool) (
+	[]HazardEvent,
+	error,
+) {
 	changed := []HazardEvent{}
 
-	for _, h := range events {
+	normalized := append([]HazardEvent(nil), events...)
+	if len(assigned) == 0 || !assigned[0] {
+		if err := normalizeEvents(ctx, tx, normalized); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, h := range normalized {
 		raw, err := json.Marshal(h.Attributes)
 		if err != nil {
 			return nil, err
@@ -191,9 +241,12 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 		}
 
 		changed = append(changed, stored)
+		if err = enqueueEvent(ctx, tx, stored, correlationID()); err != nil {
+			return nil, err
+		}
 	}
 
-	_, err = tx.Exec(ctx, `
+	_, err := tx.Exec(ctx, `
 		UPDATE source_progress
 		SET checkpoint = CASE WHEN $2::timestamptz IS NULL THEN checkpoint
 				ELSE GREATEST(checkpoint, $2::timestamptz) END,
@@ -204,31 +257,42 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 		return nil, err
 	}
 
-	if err = tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-
 	return changed, nil
 }
 
 func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
-	out := Response{Data: []HazardEvent{}, Sources: []Freshness{}}
+	out := Response{Data: []HazardEvent{}, Sources: []Freshness{}, UnavailableUnits: []string{}}
 	// Snapshot data and freshness together so a concurrent ingestion cannot mix outcomes.
-	tx, err := s.query.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := s.begin(ctx, true)
 	if err != nil {
 		return out, err
 	}
 	defer tx.Rollback(ctx)
 
-	rows, err := tx.Query(ctx, `
-		SELECT `+columns+`
-		FROM hazard_events
-		WHERE ($1 = '' OR source = $1)
-			AND ($2 = '' OR hazard_type = $2)
-			AND ($3 = '' OR severity = $3)
-			AND ($4::timestamptz IS NULL OR occurred_at >= $4)
-		ORDER BY occurred_at DESC, hazard_id
-		LIMIT $5`, q.Source, q.HazardType, q.Severity, q.Since, q.Limit)
+	cursor, err := decodeCursor(q)
+	if err != nil {
+		return out, err
+	}
+
+	if q.Limit < 1 || q.Limit > 1000 {
+		return out, errors.New("limit must be between 1 and 1000")
+	}
+
+	timeColumn, order, comparison := "occurred_at", "occurred_at DESC, hazard_id", "(occurred_at < $6 OR (occurred_at = $6 AND hazard_id > $7))"
+	if q.Audit {
+		timeColumn, order, comparison = "ingested_at", "ingested_at ASC, hazard_id", "(ingested_at > $6 OR (ingested_at = $6 AND hazard_id > $7))"
+	}
+
+	var after *time.Time
+	if q.Cursor != "" {
+		after = &cursor.Time
+	}
+
+	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM hazard_events
+ WHERE ($1 = '' OR source = $1) AND ($2 = '' OR hazard_type = $2)
+ AND ($3 = '' OR severity = $3) AND ($4::timestamptz IS NULL OR `+timeColumn+` >= $4)
+ AND ($6::timestamptz IS NULL OR `+comparison+`)
+ ORDER BY `+order+` LIMIT $5`, q.Source, q.HazardType, q.Severity, q.Since, q.Limit+1, after, cursor.ID)
 	if err != nil {
 		return out, err
 	}
@@ -248,6 +312,12 @@ func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
 
 	if err != nil {
 		return out, err
+	}
+
+	if len(out.Data) > q.Limit {
+		out.Data = out.Data[:q.Limit]
+		next := encodeCursor(q, out.Data[len(out.Data)-1])
+		out.NextCursor = &next
 	}
 
 	for _, source := range sources(q) {

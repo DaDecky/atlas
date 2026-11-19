@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: canonical-store
+spec:
+  serviceName: canonical-store
+  replicas: 3
+  selector:
+    matchLabels:
+      app: canonical-store
+  template:
+    metadata:
+      labels:
+        app: canonical-store
+        role: store
+    spec:
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: canonical-store
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: postgres
+          image: postgres:18.3-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: atlas_admin
+            - name: POSTGRES_DB
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: canonical-store-credentials
+                  key: admin-password
+            - name: CANONICAL_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: canonical-store-credentials
+                  key: aggregator-password
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: [sh, -c, 'pg_isready -U atlas_admin -d canonical']
+            periodSeconds: 3
+          livenessProbe:
+            exec:
+              command: [sh, -c, 'pg_isready -U atlas_admin -d postgres']
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+      volumes:
+        - name: init
+          configMap:
+            name: canonical-store-init
+            defaultMode: 0555
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 10Gi

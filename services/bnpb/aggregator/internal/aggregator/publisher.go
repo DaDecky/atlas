@@ -99,6 +99,14 @@ func (p *RabbitPublisher) connect(ctx context.Context) error {
 }
 
 func (p *RabbitPublisher) Publish(ctx context.Context, item Publication) error {
+	return p.publish(ctx, item, Exchange, "")
+}
+
+func (p *RabbitPublisher) PublishCritical(ctx context.Context, item Publication) error {
+	return p.publish(ctx, item, "", "field.alerts")
+}
+
+func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchange, key string) error {
 	ctx, cancel := context.WithTimeout(ctx, p.Timeout)
 	defer cancel()
 
@@ -124,7 +132,14 @@ func (p *RabbitPublisher) Publish(ctx context.Context, item Publication) error {
 		Body:          raw,
 	}
 
-	confirm, err := p.channel.PublishWithDeferredConfirmWithContext(ctx, Exchange, "", false, false, message)
+	if key == "field.alerts" {
+		if _, err = p.channel.QueueDeclare("field.alerts", true, false, false, false, nil); err != nil {
+			p.Close()
+			return err
+		}
+	}
+
+	confirm, err := p.channel.PublishWithDeferredConfirmWithContext(ctx, exchange, key, false, false, message)
 	if err == nil && confirm != nil {
 		var ack bool
 

@@ -1,0 +1,25 @@
+test ./consumers/consumer-a/go.mod
+?   	atlas/consumers/consumer-a/cmd/consumer	[no test files]
+ok  	atlas/consumers/consumer-a/internal/consumer	1.021s
+test ./consumers/consumer-b/go.mod
+?   	atlas/consumers/consumer-b/cmd/consumer	[no test files]
+ok  	atlas/consumers/consumer-b/internal/consumer	1.025s
+test ./demo/go.mod
+ok  	atlas/demo	1.015s
+test ./services/bmkg/go.mod
+?   	atlas/services/bmkg/cmd/bmkg	[no test files]
+ok  	atlas/services/bmkg/internal/bmkg	1.212s
+test ./services/bnpb/aggregator/go.mod
+?   	atlas/services/bnpb/aggregator/cmd/aggregator	[no test files]
+?   	atlas/services/bnpb/aggregator/cmd/data-tool	[no test files]
+ok  	atlas/services/bnpb/aggregator/internal/aggregator	1.444s
+ok  	atlas/services/bnpb/aggregator/internal/placement	1.079s
+test ./services/bnpb/auth/go.mod
+?   	atlas/services/bnpb/auth/cmd/auth	[no test files]
+ok  	atlas/services/bnpb/auth/internal/auth	3.031s
+test ./services/bnpb/client-api/go.mod
+?   	atlas/services/bnpb/client-api/cmd/client-api	[no test files]
+ok  	atlas/services/bnpb/client-api/internal/clientapi	1.173s
+test ./services/pvmbg/go.mod
+?   	atlas/services/pvmbg/cmd/pvmbg	[no test files]
+ok  	atlas/services/pvmbg/internal/pvmbg	1.626s

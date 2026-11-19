@@ -33,11 +33,16 @@ type Query struct {
 	Source, HazardType, Severity string
 	Since                        *time.Time
 	Limit                        int
+	Cursor                       string
+	Audit                        bool
 }
 
 type Response struct {
-	Data    []HazardEvent `json:"data"`
-	Sources []Freshness   `json:"sources"`
+	Data             []HazardEvent `json:"data"`
+	Sources          []Freshness   `json:"sources"`
+	Partial          bool          `json:"partial"`
+	UnavailableUnits []string      `json:"unavailable_units"`
+	NextCursor       *string       `json:"next_cursor"`
 }
 
 func hazardID(source, ref string) string {
@@ -58,5 +63,17 @@ func sources(q Query) []string {
 		return []string{"PVMBG"}
 	}
 
-	return []string{"BMKG", "PVMBG"}
+	if q.HazardType == "WILDFIRE" {
+		return []string{"SATELIT"}
+	}
+
+	if q.HazardType == "COASTAL" {
+		return []string{"SENSOR_PANTAI"}
+	}
+
+	return []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"}
 }
+
+// CanonicalHazardID is shared by source adapters and data tools. A replay must
+// retain the same source/reference pair to address the same canonical event.
+func CanonicalHazardID(source, ref string) string { return hazardID(source, ref) }

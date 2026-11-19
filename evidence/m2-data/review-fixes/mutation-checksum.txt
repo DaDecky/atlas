@@ -1,0 +1,9 @@
+=== RUN   TestRefillRejectsDifferingDigests
+    review_integration_test.go:115: refill accepted different digests
+--- FAIL: TestRefillRejectsDifferingDigests (8.79s)
+FAIL
+FAIL	atlas/services/bnpb/aggregator/internal/aggregator	8.800s
+testing: warning: no tests to run
+PASS
+ok  	atlas/services/bnpb/aggregator/internal/placement	1.012s [no tests to run]
+FAIL

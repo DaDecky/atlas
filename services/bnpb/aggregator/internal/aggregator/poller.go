@@ -291,13 +291,7 @@ func (p *Poller) Poll(ctx context.Context, id string) error {
 		select {
 		case p.Pending <- Publication{h, id}:
 		default:
-			p.Log.Error(
-				"publication_dropped",
-				"source", p.Source,
-				"hazard_id", h.HazardID,
-				"correlation_id", id,
-				"reason", "queue_full",
-			)
+			// Durable outbox owns delivery; hints may be dropped.
 		}
 	}
 

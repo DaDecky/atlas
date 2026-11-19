@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: aggregator-data
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aggregator-data
+rules:
+  - apiGroups: ['']
+    resources: [configmaps]
+    resourceNames: [canonical-placement]
+    verbs: [get, update, watch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [canonical-placement-recovery]
+    verbs: [get, update]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aggregator-data
+subjects:
+  - kind: ServiceAccount
+    name: aggregator-data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aggregator-data

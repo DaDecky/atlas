@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sistem-informasi-kebencanaan-bnpb
+resources:
+  - service.yaml
+  - statefulset.yaml
+  - placement-rbac.yaml
+configMapGenerator:
+  - name: canonical-store-init
+    files:
+      - init.sh

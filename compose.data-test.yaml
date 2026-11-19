@@ -1,0 +1,22 @@
+services:
+  store-a: &store
+    image: postgres:18.3-alpine
+    environment:
+      POSTGRES_USER: atlas_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: local-admin-test
+      CANONICAL_DB_PASSWORD: local-data-test
+    volumes:
+      - ./deploy/store/init.sh:/docker-entrypoint-initdb.d/01-owner.sh:ro
+    ports: ['127.0.0.1::5432']
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U atlas_admin -d canonical']
+      interval: 1s
+      timeout: 2s
+      retries: 30
+  store-b:
+    <<: *store
+  store-c:
+    <<: *store
+  store-d:
+    <<: *store

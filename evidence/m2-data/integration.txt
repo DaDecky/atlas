@@ -1,0 +1,84 @@
+=== RUN   TestIntegrationStorePersistsSeedAndFiltersSince
+--- PASS: TestIntegrationStorePersistsSeedAndFiltersSince (0.26s)
+PASS
+ok  	atlas/services/bmkg/internal/bmkg	1.278s
+=== RUN   TestIntegrationStorePersistsReportsAndSchemaVersion
+--- PASS: TestIntegrationStorePersistsReportsAndSchemaVersion (0.16s)
+PASS
+ok  	atlas/services/pvmbg/internal/pvmbg	1.185s
+=== RUN   TestDataIntegrationDualWriteWipeRefillAndNextLoss
+=== RUN   TestDataIntegrationReplicatedContract
+=== RUN   TestDataIntegrationReplicatedContract/idempotent_revisions_and_checkpoint_rollback
+=== RUN   TestDataIntegrationReplicatedContract/source_epochs_fence_every_write_path
+=== RUN   TestDataIntegrationReplicatedContract/events_state_and_offset_commit_together
+=== RUN   TestDataIntegrationReplicatedContract/concurrent_replay_has_one_effect
+--- PASS: TestDataIntegrationReplicatedContract (0.00s)
+=== RUN   TestDataIntegrationLiveRefillAndAudit
+=== RUN   TestDataIntegrationAutomaticWipeRecoveryAndParking
+=== RUN   TestDataIntegrationNewNodeJoinsWithoutStoppingReads
+=== RUN   TestDataIntegrationTakeoverExcludesUnsealedReplica
+=== RUN   TestDataIntegrationConcurrentWritersDoNotStarveIngestionPool
+=== RUN   TestIntegrationSavePublishProcessCrash
+--- PASS: TestIntegrationSavePublishProcessCrash (0.33s)
+=== RUN   TestIntegrationDataAuditPaginationAnalyticsOutboxParking
+--- PASS: TestIntegrationDataAuditPaginationAnalyticsOutboxParking (0.12s)
+=== RUN   TestIntegrationParkingAutomaticRetryAndClockRollback
+--- PASS: TestIntegrationParkingAutomaticRetryAndClockRollback (0.08s)
+=== RUN   TestIntegrationStoreCommitRollbackRestartAndOwnership
+--- PASS: TestIntegrationStoreCommitRollbackRestartAndOwnership (0.18s)
+=== RUN   TestIntegrationLivePollingMappingFreshnessAndReads
+--- PASS: TestIntegrationLivePollingMappingFreshnessAndReads (3.17s)
+=== RUN   TestIntegrationRabbitFanoutConfirmAndReconnect
+--- PASS: TestIntegrationRabbitFanoutConfirmAndReconnect (0.05s)
+=== RUN   TestIntegrationOutboxAtomicPriorityAndRetry
+--- PASS: TestIntegrationOutboxAtomicPriorityAndRetry (0.09s)
+=== RUN   TestIntegrationShardStoreContract
+=== RUN   TestIntegrationShardStoreContract/idempotent_revisions_and_checkpoint_rollback
+=== RUN   TestIntegrationShardStoreContract/source_epochs_fence_every_write_path
+=== RUN   TestIntegrationShardStoreContract/events_state_and_offset_commit_together
+=== RUN   TestIntegrationShardStoreContract/concurrent_replay_has_one_effect
+--- PASS: TestIntegrationShardStoreContract (0.32s)
+    --- PASS: TestIntegrationShardStoreContract/idempotent_revisions_and_checkpoint_rollback (0.08s)
+    --- PASS: TestIntegrationShardStoreContract/source_epochs_fence_every_write_path (0.08s)
+    --- PASS: TestIntegrationShardStoreContract/events_state_and_offset_commit_together (0.08s)
+    --- PASS: TestIntegrationShardStoreContract/concurrent_replay_has_one_effect (0.08s)
+=== RUN   TestIntegrationShardStoreRestart
+--- PASS: TestIntegrationShardStoreRestart (0.17s)
+PASS
+ok  	atlas/services/bnpb/aggregator/internal/aggregator	5.524s
+PASS
+ok  	atlas/services/bnpb/aggregator/internal/placement	1.020s [no tests to run]
+=== RUN   TestIntegrationSessionSurvivesAuthStoreRestart
+--- PASS: TestIntegrationSessionSurvivesAuthStoreRestart (0.14s)
+=== RUN   TestIntegrationConcurrentRefreshRevocationAndExpiry
+--- PASS: TestIntegrationConcurrentRefreshRevocationAndExpiry (0.08s)
+PASS
+ok  	atlas/services/bnpb/auth/internal/auth	1.236s
+=== RUN   TestIntegrationRedeliveryAfterPersistBeforeAck
+--- PASS: TestIntegrationRedeliveryAfterPersistBeforeAck (0.06s)
+=== RUN   TestIntegrationQueueBoundsAndRetention
+--- PASS: TestIntegrationQueueBoundsAndRetention (1.21s)
+=== RUN   TestIntegrationIndependentQueuesAndRestartCatchup
+--- PASS: TestIntegrationIndependentQueuesAndRestartCatchup (0.09s)
+=== RUN   TestIntegrationExistingQueueKeepsBacklog
+=== RUN   TestIntegrationExistingQueueKeepsBacklog/existing_with_different_limits
+=== RUN   TestIntegrationExistingQueueKeepsBacklog/new_queue
+--- PASS: TestIntegrationExistingQueueKeepsBacklog (1.46s)
+    --- PASS: TestIntegrationExistingQueueKeepsBacklog/existing_with_different_limits (1.38s)
+    --- PASS: TestIntegrationExistingQueueKeepsBacklog/new_queue (0.08s)
+PASS
+ok  	atlas/consumers/consumer-a/internal/consumer	3.838s
+=== RUN   TestIntegrationRedeliveryAfterPersistBeforeAck
+--- PASS: TestIntegrationRedeliveryAfterPersistBeforeAck (0.08s)
+=== RUN   TestIntegrationQueueBoundsAndRetention
+--- PASS: TestIntegrationQueueBoundsAndRetention (1.22s)
+=== RUN   TestIntegrationIndependentQueuesAndRestartCatchup
+--- PASS: TestIntegrationIndependentQueuesAndRestartCatchup (0.09s)
+=== RUN   TestIntegrationExistingQueueKeepsBacklog
+=== RUN   TestIntegrationExistingQueueKeepsBacklog/existing_with_different_limits
+=== RUN   TestIntegrationExistingQueueKeepsBacklog/new_queue
+--- PASS: TestIntegrationExistingQueueKeepsBacklog (1.26s)
+    --- PASS: TestIntegrationExistingQueueKeepsBacklog/existing_with_different_limits (1.23s)
+    --- PASS: TestIntegrationExistingQueueKeepsBacklog/new_queue (0.03s)
+PASS
+ok  	atlas/consumers/consumer-b/internal/consumer	3.685s

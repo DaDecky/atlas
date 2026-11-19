@@ -23,9 +23,14 @@ func run(log *slog.Logger) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	startup, stop := context.WithTimeout(ctx, c.StartupTimeout)
+	startupTimeout := c.StartupTimeout
+	if os.Getenv("M2_DATA_CONFIG") != "" {
+		startupTimeout = 2 * time.Minute
+	}
 
-	store, err := aggregator.OpenStore(startup, c.DatabaseURL, c.IngestPool, c.QueryPool, c.DBConnectTimeout)
+	startup, stop := context.WithTimeout(ctx, startupTimeout)
+
+	store, err := openData(startup, c)
 
 	stop()
 
@@ -36,14 +41,6 @@ func run(log *slog.Logger) error {
 	defer store.Close()
 
 	pending := make(chan aggregator.Publication, c.PublishCapacity)
-	worker := &aggregator.PublishWorker{
-		Publisher: &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout, Heartbeat: c.BrokerHeartbeat},
-		Pending:   pending,
-		Timeout:   c.PublishTimeout,
-		Backoff:   c.Backoff,
-		Retries:   c.PublishRetries,
-		Log:       log,
-	}
 
 	var wg sync.WaitGroup
 
@@ -56,9 +53,36 @@ func run(log *slog.Logger) error {
 			f(ctx)
 		}()
 	}
-	launch(worker.Run)
 
-	for _, source := range []string{"BMKG", "PVMBG"} {
+	if cluster, ok := store.(*aggregator.Cluster); ok {
+		lease, err := cluster.PlacementLease()
+		if err != nil {
+			return err
+		}
+
+		launch(func(ctx context.Context) {
+			cluster.RunRecovery(ctx, lease, func(err error) { log.Error("refill_failed", "reason", err.Error()) })
+		})
+	}
+
+	launch(func(ctx context.Context) {
+		aggregator.RunRelay(ctx, store, &aggregator.RabbitPublisher{URL: c.RabbitMQURL, Timeout: c.PublishTimeout, Heartbeat: c.BrokerHeartbeat}, 200*time.Millisecond, func(err error) { log.Error("outbox_relay_failed", "reason", err.Error()) })
+	})
+
+	sources := []string{"BMKG", "PVMBG"}
+	if os.Getenv("M2_READ_ONLY") == "1" {
+		sources = nil
+	}
+
+	for _, source := range sources {
+		ingest, err := ingestData(store, source)
+		if err != nil {
+			cancel()
+			wg.Wait()
+
+			return err
+		}
+
 		base, key := c.BMKGURL, c.BMKGKey
 		if source == "PVMBG" {
 			base, key = c.PVMBGURL, c.PVMBGToken
@@ -91,7 +115,7 @@ func run(log *slog.Logger) error {
 			FailureMarkTimeout: c.FailureMarkTimeout,
 
 			Client:  client,
-			Store:   store,
+			Store:   ingest,
 			Pending: pending,
 			Log:     log,
 		}
@@ -107,7 +131,7 @@ func run(log *slog.Logger) error {
 	}
 	server := &http.Server{
 		Addr:              c.Address,
-		Handler:           api.Handler(),
+		Handler:           dataHandler(api, store, c),
 		ReadHeaderTimeout: c.HTTPReadHeaderTimeout,
 		ReadTimeout:       c.HTTPReadTimeout,
 		WriteTimeout:      c.QueryTimeout + time.Second,
