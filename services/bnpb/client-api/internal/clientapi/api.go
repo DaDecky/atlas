@@ -205,6 +205,21 @@ func (a *API) outbound(
 	return resp, err
 }
 
+// readAggregator retries a failed read once. Dropping idle connections first makes the retry
+// dial again, so the Service can route it to another instance.
+func (a *API) readAggregator(ctx context.Context, target, class, id string) (*http.Response, error) {
+	headers := map[string]string{"Authorization": "Bearer " + a.Config.AggregatorToken, "X-Request-Class": class}
+
+	resp, err := a.outbound(ctx, http.MethodGet, target, headers, nil, id, "aggregator")
+	if err == nil || ctx.Err() != nil {
+		return resp, err
+	}
+
+	a.Client.CloseIdleConnections()
+
+	return a.outbound(ctx, http.MethodGet, target, headers, nil, id, "aggregator")
+}
+
 func (a *API) validateCurrent(ctx context.Context, claims AccessClaims, id string) (int, string) {
 	body, _ := json.Marshal(validateRequest{SessionID: claims.SessionID, TokenVersion: claims.TokenVersion})
 
@@ -424,10 +439,7 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 		target += "?" + encoded
 	}
 
-	resp, err := a.outbound(r.Context(), http.MethodGet, target, map[string]string{
-		"Authorization":   "Bearer " + a.Config.AggregatorToken,
-		"X-Request-Class": requestClass(claims),
-	}, nil, r.Header.Get("X-Correlation-ID"), "aggregator")
+	resp, err := a.readAggregator(r.Context(), target, requestClass(claims), r.Header.Get("X-Correlation-ID"))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "aggregator_unavailable")
 		return
