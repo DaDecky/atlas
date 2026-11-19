@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS unprocessed_messages (
  correlation_id text NOT NULL
 );
 CREATE INDEX IF NOT EXISTS parking_pending ON unprocessed_messages(source,received_at,message_id) WHERE status <> 'recovered';
+CREATE TABLE IF NOT EXISTS field_reports_inbox (
+ report_id text PRIMARY KEY, payload jsonb NOT NULL CHECK(jsonb_typeof(payload)='object'),
+ received_at timestamptz NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ingestion_clock(singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),last_value timestamptz NOT NULL);
 INSERT INTO ingestion_clock(singleton,last_value) VALUES(true,'epoch') ON CONFLICT DO NOTHING;
 COMMIT;

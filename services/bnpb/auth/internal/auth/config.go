@@ -110,11 +110,11 @@ func ConfigFromEnv() (Config, error) {
 
 	c.Clients = []ClientCredential{
 		{ID: os.Getenv("MEDIA_CLIENT_ID"), Secret: os.Getenv("MEDIA_CLIENT_SECRET"), Scope: "hazards:summary"},
-		{ID: os.Getenv("FIELD_TEAM_CLIENT_ID"), Secret: os.Getenv("FIELD_TEAM_CLIENT_SECRET"), Scope: "hazards:raw"},
+		{ID: os.Getenv("FIELD_TEAM_CLIENT_ID"), Secret: os.Getenv("FIELD_TEAM_CLIENT_SECRET"), Scope: "hazards:raw reports:write"},
 		{
 			ID:     os.Getenv("INTERNAL_OPS_CLIENT_ID"),
 			Secret: os.Getenv("INTERNAL_OPS_CLIENT_SECRET"),
-			Scope:  "hazards:raw",
+			Scope:  "hazards:raw ops:read",
 		},
 	}
 

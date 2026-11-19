@@ -180,6 +180,35 @@ func copyShard(ctx context.Context, from, to *Store) error {
 		return err
 	}
 
+	reports, err := tx.Query(ctx, `SELECT report_id,payload,received_at FROM field_reports_inbox ORDER BY report_id`)
+	if err != nil {
+		return err
+	}
+
+	for reports.Next() {
+		var (
+			id       string
+			payload  []byte
+			received time.Time
+		)
+		if err = reports.Scan(&id, &payload, &received); err != nil {
+			reports.Close()
+			return err
+		}
+
+		if err = to.restoreFieldReport(ctx, id, payload, received); err != nil {
+			reports.Close()
+			return err
+		}
+	}
+
+	err = reports.Err()
+	reports.Close()
+
+	if err != nil {
+		return err
+	}
+
 	for _, source := range []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"} {
 		var (
 			progress   Freshness
@@ -280,6 +309,28 @@ func shardDigest(ctx context.Context, s *Store) (string, error) {
 
 	err = rows.Err()
 	rows.Close()
+
+	if err != nil {
+		return "", err
+	}
+
+	reports, err := tx.Query(ctx, `SELECT row_to_json(r)::text FROM (SELECT report_id,payload FROM field_reports_inbox ORDER BY report_id COLLATE "C") r`)
+	if err != nil {
+		return "", err
+	}
+
+	for reports.Next() {
+		var raw string
+		if err = reports.Scan(&raw); err != nil {
+			reports.Close()
+			return "", err
+		}
+
+		_, _ = fmt.Fprintln(hash, "field_report", raw)
+	}
+
+	err = reports.Err()
+	reports.Close()
 
 	if err != nil {
 		return "", err

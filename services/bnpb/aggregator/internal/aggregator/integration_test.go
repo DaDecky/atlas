@@ -34,7 +34,7 @@ func integrationStore(t *testing.T) *Store {
 	}
 
 	const reset = `
-		TRUNCATE hazard_events, stream_state, publication_outbox, unprocessed_messages;
+		TRUNCATE hazard_events, stream_state, publication_outbox, unprocessed_messages, field_reports_inbox;
 		UPDATE source_fence SET epoch = 1;
  UPDATE ingestion_clock SET last_value='epoch';
 		UPDATE source_progress SET checkpoint = NULL, last_success_at = NULL, stale_since = NULL`

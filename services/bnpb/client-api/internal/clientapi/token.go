@@ -22,6 +22,29 @@ type AccessClaims struct {
 	TokenID      string `json:"jti"`
 }
 
+func hasScope(scopes, wanted string) bool {
+	for _, scope := range strings.Fields(scopes) {
+		if scope == wanted {
+			return true
+		}
+	}
+
+	return false
+}
+
+func validScopes(scopes string) bool {
+	seen := map[string]bool{}
+	for _, scope := range strings.Fields(scopes) {
+		if seen[scope] || scope != "hazards:summary" && scope != "hazards:raw" && scope != "reports:write" && scope != "ops:read" {
+			return false
+		}
+
+		seen[scope] = true
+	}
+
+	return seen["hazards:summary"] || seen["hazards:raw"]
+}
+
 func verifyAccessToken(
 	token string,
 	key ed25519.PublicKey,
@@ -65,7 +88,7 @@ func verifyAccessToken(
 	}
 
 	if claims.Issuer != issuer || claims.Audience != audience || claims.Subject == "" ||
-		claims.Subject != claims.ClientID || claims.Scope != "hazards:summary" && claims.Scope != "hazards:raw" ||
+		claims.Subject != claims.ClientID || !validScopes(claims.Scope) ||
 		claims.SessionID == "" || claims.TokenVersion < 1 || claims.TokenID == "" {
 		return AccessClaims{}, errors.New("invalid token claims")
 	}

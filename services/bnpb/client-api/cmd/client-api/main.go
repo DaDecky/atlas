@@ -30,7 +30,7 @@ func run(log *slog.Logger) error {
 		Timeout:       cfg.OutboundTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	api := &clientapi.API{Config: cfg, Client: client, Log: log}
+	api := &clientapi.API{Config: cfg, Client: client, Log: log, Reports: &clientapi.RabbitReports{URL: cfg.RabbitMQURL, Timeout: cfg.OutboundTimeout}}
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           api.Handler(),

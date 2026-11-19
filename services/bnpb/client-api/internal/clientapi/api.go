@@ -22,6 +22,7 @@ type API struct {
 	Config       Config
 	Client       *http.Client
 	Log          *slog.Logger
+	Reports      ReportPublisher
 	capacity     chan struct{}
 	capacityOnce sync.Once
 }
@@ -95,6 +96,7 @@ func allowedFilters(raw string) (url.Values, string, error) {
 		"since":       true,
 		"limit":       true,
 		"view":        true,
+		"cursor":      true,
 	}
 	for key, values := range parsed {
 		if !allowed[key] || len(values) != 1 {
@@ -105,11 +107,11 @@ func allowedFilters(raw string) (url.Values, string, error) {
 
 		switch key {
 		case "source":
-			if value != "BMKG" && value != "PVMBG" {
+			if !validSource(value) {
 				return nil, "", errors.New("invalid source")
 			}
 		case "hazard_type":
-			if value != "SEISMIC" && value != "VOLCANIC" {
+			if value != "SEISMIC" && value != "VOLCANIC" && value != "WILDFIRE" && value != "COASTAL" {
 				return nil, "", errors.New("invalid hazard type")
 			}
 		case "severity":
@@ -133,17 +135,25 @@ func allowedFilters(raw string) (url.Values, string, error) {
 			view = value
 
 			continue
+		case "cursor":
+			if len(value) > 4096 {
+				return nil, "", errors.New("invalid cursor")
+			}
 		}
 
 		out.Set(key, value)
 	}
 
-	if out.Get("source") == "BMKG" && out.Get("hazard_type") == "VOLCANIC" ||
-		out.Get("source") == "PVMBG" && out.Get("hazard_type") == "SEISMIC" {
+	types := map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
+	if source, kind := out.Get("source"), out.Get("hazard_type"); source != "" && kind != "" && types[source] != kind {
 		return nil, "", errors.New("contradictory filters")
 	}
 
 	return out, view, nil
+}
+
+func validSource(source string) bool {
+	return source == "BMKG" || source == "PVMBG" || source == "SATELIT" || source == "SENSOR_PANTAI"
 }
 
 func (a *API) outbound(
@@ -316,7 +326,7 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 
 	for _, source := range freshness {
 		var name, state string
-		if json.Unmarshal(source["source"], &name) != nil || (name != "BMKG" && name != "PVMBG") ||
+		if json.Unmarshal(source["source"], &name) != nil || !validSource(name) ||
 			json.Unmarshal(source["status"], &state) != nil ||
 			(state != "healthy" && state != "stale" && state != "unavailable") {
 			return nil, errors.New("invalid freshness")
@@ -336,10 +346,36 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 		}
 	}
 
-	return json.Marshal(struct {
-		Data    json.RawMessage              `json:"data"`
-		Sources []map[string]json.RawMessage `json:"sources"`
-	}{data, freshness})
+	out := map[string]any{"data": data, "sources": freshness}
+
+	for _, key := range []string{"partial", "unavailable_units", "next_cursor"} {
+		raw, exists := envelope[key]
+		if !exists {
+			continue
+		}
+
+		switch key {
+		case "partial":
+			var value bool
+			if string(raw) == "null" || json.Unmarshal(raw, &value) != nil {
+				return nil, errors.New("invalid partial marker")
+			}
+		case "unavailable_units":
+			var value []string
+			if json.Unmarshal(raw, &value) != nil || len(value) > 128 {
+				return nil, errors.New("invalid unavailable units")
+			}
+		case "next_cursor":
+			var value *string
+			if json.Unmarshal(raw, &value) != nil || value != nil && len(*value) > 4096 {
+				return nil, errors.New("invalid next cursor")
+			}
+		}
+
+		out[key] = raw
+	}
+
+	return json.Marshal(out)
 }
 
 func retryAfter(raw string) string {
@@ -390,7 +426,7 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if view == "raw" && claims.Scope != "hazards:raw" {
+	if view == "raw" && !hasScope(claims.Scope, "hazards:raw") {
 		writeError(w, http.StatusForbidden, "insufficient_scope")
 		return
 	}
@@ -460,6 +496,9 @@ func (a *API) Handler() http.Handler {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 	})
 	mux.Get("/hazards", a.hazards)
+	mux.Post("/field-reports", a.fieldReports)
+	mux.Get("/internal-ops/unprocessed", a.ops)
+	mux.Post("/internal-ops/replay", a.ops)
 	mux.Get("/health", a.health)
 
 	return mux

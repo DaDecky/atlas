@@ -76,7 +76,7 @@ func dataCluster(t *testing.T) *Cluster {
 				t.Fatal(err)
 			}
 
-			_, err = tx.Exec(ctx, `TRUNCATE hazard_events,stream_state,unprocessed_messages; UPDATE source_progress SET checkpoint=NULL,last_success_at=NULL,stale_since=NULL`)
+			_, err = tx.Exec(ctx, `TRUNCATE hazard_events,stream_state,unprocessed_messages,field_reports_inbox; UPDATE source_progress SET checkpoint=NULL,last_success_at=NULL,stale_since=NULL`)
 			if err == nil {
 				err = tx.Commit(ctx)
 			}

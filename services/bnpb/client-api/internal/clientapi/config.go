@@ -19,6 +19,7 @@ type Config struct {
 	PublicKey                                                       ed25519.PublicKey
 	OutboundTimeout                                                 time.Duration
 	RequestCapacity                                                 int
+	RabbitMQURL                                                     string
 }
 
 const (
@@ -74,6 +75,7 @@ func ConfigFromEnv() (Config, error) {
 		AuthURL: os.Getenv("AUTH_BASE_URL"), AggregatorURL: os.Getenv("AGGREGATOR_BASE_URL"),
 		AggregatorToken: os.Getenv("AGGREGATOR_INTERNAL_TOKEN"), ValidateToken: os.Getenv("AUTH_VALIDATE_TOKEN"),
 		Address: os.Getenv("CLIENT_API_HTTP_ADDR"), Issuer: "atlas-auth", Audience: "atlas-client-api",
+		RabbitMQURL: os.Getenv("RABBITMQ_URL"),
 	}
 	for name, value := range map[string]string{
 		"AUTH_BASE_URL":             c.AuthURL,

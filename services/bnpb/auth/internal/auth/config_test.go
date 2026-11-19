@@ -52,7 +52,7 @@ func TestConfigDefaultsAndRejection(t *testing.T) {
 		t.Fatal(c, err)
 	}
 
-	if len(c.Clients) != 3 || c.Clients[0].Scope != "hazards:summary" || c.Clients[1].Scope != "hazards:raw" {
+	if len(c.Clients) != 3 || c.Clients[0].Scope != "hazards:summary" || c.Clients[1].Scope != "hazards:raw reports:write" || c.Clients[2].Scope != "hazards:raw ops:read" {
 		t.Fatalf("clients %+v", c.Clients)
 	}
 
