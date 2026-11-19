@@ -19,7 +19,7 @@ type runtimeData interface {
 }
 
 func openData(ctx context.Context, c aggregator.Config) (runtimeData, error) {
-	if path := os.Getenv("M2_DATA_CONFIG"); path != "" {
+	if path := os.Getenv("CLUSTER_DATA_CONFIG"); path != "" {
 		return aggregator.OpenClusterConfig(ctx, path)
 	}
 

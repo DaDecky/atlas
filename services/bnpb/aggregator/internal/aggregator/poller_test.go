@@ -26,6 +26,7 @@ type memoryStore struct {
 	failSave       bool
 	warningLookups [][]string
 	parked         []ParkedMessage
+	changed        []HazardEvent
 }
 
 func (s *memoryStore) Park(_ context.Context, message ParkedMessage) error {
@@ -122,11 +123,12 @@ func (s *memoryStore) Save(_ context.Context, source string, events []HazardEven
 
 	s.checkpoint[source] = checkpoint
 	s.commits[source]++
+	s.changed = append(s.changed, created...)
 
 	return created, nil
 }
 
-func newPoller(source, base string, store IngestStore, pending chan Publication) *Poller {
+func newPoller(source, base string, store IngestStore) *Poller {
 	return &Poller{
 		Source:     source,
 		BaseURL:    base,
@@ -141,10 +143,9 @@ func newPoller(source, base string, store IngestStore, pending chan Publication)
 		WarningLookback:    defaultWarningLookback,
 		FailureMarkTimeout: defaultFailureMarkTimeout,
 
-		Client:  &http.Client{},
-		Store:   store,
-		Pending: pending,
-		Log:     testLog(),
+		Client: &http.Client{},
+		Store:  store,
+		Log:    testLog(),
 	}
 }
 
@@ -165,14 +166,13 @@ func TestPollingCredentialsCheckpointAndCommitFailure(t *testing.T) {
 	defer server.Close()
 
 	store := newMemoryStore()
-	pending := make(chan Publication, 4)
 
-	p := newPoller("PVMBG", server.URL, store, pending)
+	p := newPoller("PVMBG", server.URL, store)
 	if err := p.Poll(context.Background(), "poll-id"); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 1 {
+	if len(store.changed) != 1 {
 		t.Fatal("missing publication")
 	}
 
@@ -180,7 +180,7 @@ func TestPollingCredentialsCheckpointAndCommitFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 1 || since != "2026-09-30T00:00:00Z" {
+	if len(store.changed) != 1 || since != "2026-09-30T00:00:00Z" {
 		t.Fatal("overlap or checkpoint failed", since)
 	}
 
@@ -191,7 +191,7 @@ func TestPollingCredentialsCheckpointAndCommitFailure(t *testing.T) {
 		t.Fatal("save failed silently")
 	}
 
-	if len(pending) != 1 || store.checkpoint["PVMBG"].Format(time.RFC3339) != "2026-09-30T00:00:00Z" {
+	if len(store.changed) != 1 || store.checkpoint["PVMBG"].Format(time.RFC3339) != "2026-09-30T00:00:00Z" {
 		t.Fatal("publication or cursor preceded commit")
 	}
 }
@@ -234,9 +234,8 @@ func TestIndependentPollingDuringSlowSourceAndOutage(t *testing.T) {
 	defer fast.Close()
 
 	store := newMemoryStore()
-	pending := make(chan Publication, 16)
-	a := newPoller("BMKG", fast.URL, store, pending)
-	b := newPoller("PVMBG", slow.URL, store, pending)
+	a := newPoller("BMKG", fast.URL, store)
+	b := newPoller("PVMBG", slow.URL, store)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var wg sync.WaitGroup
@@ -298,7 +297,7 @@ func TestSourceBoundsRetriesAndCancellation(t *testing.T) {
 			}))
 			defer s.Close()
 
-			p := newPoller("PVMBG", s.URL, newMemoryStore(), make(chan Publication, 1))
+			p := newPoller("PVMBG", s.URL, newMemoryStore())
 			// The server answers at once, so a slow machine must not turn this into a timeout and a retry.
 			p.Timeout = time.Second
 
@@ -320,7 +319,7 @@ func TestSourceBoundsRetriesAndCancellation(t *testing.T) {
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
 	defer slow.Close()
 
-	p := newPoller("PVMBG", slow.URL, newMemoryStore(), make(chan Publication, 1))
+	p := newPoller("PVMBG", slow.URL, newMemoryStore())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -340,7 +339,7 @@ func TestSourceCallLogsDependencyAndSafeFailure(t *testing.T) {
 
 	var output bytes.Buffer
 
-	p := newPoller("PVMBG", s.URL, newMemoryStore(), make(chan Publication, 1))
+	p := newPoller("PVMBG", s.URL, newMemoryStore())
 
 	p.Log = slog.New(slog.NewJSONHandler(&output, nil))
 	if _, _, err := p.fetchOnce(context.Background(), "/volcanic-reports", nil, "poll-log"); err == nil {
@@ -382,7 +381,7 @@ func TestPollRejectsBadRecordsWithoutStallingSource(t *testing.T) {
 	var output bytes.Buffer
 
 	store := newMemoryStore()
-	p := newPoller("PVMBG", server.URL, store, make(chan Publication, 4))
+	p := newPoller("PVMBG", server.URL, store)
 
 	p.Log = slog.New(slog.NewJSONHandler(&output, nil))
 	if err := p.Poll(context.Background(), "poll-bad"); err != nil {
@@ -443,9 +442,8 @@ func TestWarningsUseLookbackAndLoadOnlyReferencedEvents(t *testing.T) {
 	defer server.Close()
 
 	store := newMemoryStore()
-	pending := make(chan Publication, 16)
 
-	p := newPoller("BMKG", server.URL, store, pending)
+	p := newPoller("BMKG", server.URL, store)
 	if err := p.Poll(context.Background(), "first"); err != nil {
 		t.Fatal(err)
 	}
@@ -456,9 +454,7 @@ func TestWarningsUseLookbackAndLoadOnlyReferencedEvents(t *testing.T) {
 
 	original := store.events[hazardID("BMKG", "quake-5")]
 
-	for len(pending) > 0 {
-		<-pending
-	}
+	store.changed = nil
 	// A late warning for an already stored event, beside an invalid one and a duplicate.
 	mu.Lock()
 	served, warnings = []Object{}, []Object{good, bad, good}
@@ -476,11 +472,13 @@ func TestWarningsUseLookbackAndLoadOnlyReferencedEvents(t *testing.T) {
 		t.Fatal("must load only events referenced by valid warnings", store.warningLookups)
 	}
 
-	if len(pending) != 1 {
-		t.Fatal("missing update publication", len(pending))
+	if len(store.changed) != 1 {
+		t.Fatal("missing update publication", len(store.changed))
 	}
 
-	update := (<-pending).Event
+	update := store.changed[0]
+	store.changed = nil
+
 	if update.HazardID != original.HazardID || update.Revision != 2 || update.Severity != "AWAS" ||
 		!update.IngestedAt.Equal(original.IngestedAt) {
 		t.Fatal("late warning revision or identity", update)
@@ -490,7 +488,7 @@ func TestWarningsUseLookbackAndLoadOnlyReferencedEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 0 {
+	if len(store.changed) != 0 {
 		t.Fatal("unchanged warning published")
 	}
 }
@@ -513,17 +511,14 @@ func TestLateWarningAttributeUpdatesAndReorderedWarnings(t *testing.T) {
 	}))
 	defer server.Close()
 
-	pending := make(chan Publication, 16)
 	store := newMemoryStore()
 
-	p := newPoller("BMKG", server.URL, store, pending)
+	p := newPoller("BMKG", server.URL, store)
 	if err := p.Poll(context.Background(), "first"); err != nil {
 		t.Fatal(err)
 	}
 
-	for len(pending) > 0 {
-		<-pending
-	}
+	store.changed = nil
 
 	seismic = []Object{}
 	warnings = []Object{first, second}
@@ -532,11 +527,13 @@ func TestLateWarningAttributeUpdatesAndReorderedWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 1 {
-		t.Fatal("attribute-only warning update missing", len(pending))
+	if len(store.changed) != 1 {
+		t.Fatal("attribute-only warning update missing", len(store.changed))
 	}
 
-	update := (<-pending).Event
+	update := store.changed[0]
+	store.changed = nil
+
 	if update.Revision != 2 || update.Severity != "AWAS" {
 		t.Fatal(update)
 	}
@@ -547,7 +544,7 @@ func TestLateWarningAttributeUpdatesAndReorderedWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 0 {
+	if len(store.changed) != 0 {
 		t.Fatal("warning order caused republication")
 	}
 }

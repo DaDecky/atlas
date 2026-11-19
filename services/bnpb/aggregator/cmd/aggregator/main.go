@@ -24,7 +24,7 @@ func run(log *slog.Logger) error {
 	defer cancel()
 
 	startupTimeout := c.StartupTimeout
-	if os.Getenv("M2_DATA_CONFIG") != "" {
+	if os.Getenv("CLUSTER_DATA_CONFIG") != "" {
 		startupTimeout = 2 * time.Minute
 	}
 

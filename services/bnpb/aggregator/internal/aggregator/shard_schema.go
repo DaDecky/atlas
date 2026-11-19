@@ -92,8 +92,8 @@ func (s *Store) initShard(ctx context.Context, name string) (*Store, error) {
 	if _, err = tx.Exec(ctx, schema); err != nil {
 		return nil, err
 	}
-	// m2Schema is already an explicit transaction, so apply its statements inside ours.
-	migration := strings.ReplaceAll(strings.ReplaceAll(m2Schema, "BEGIN;", ""), "COMMIT;", "")
+	// schemaMigrations is already an explicit transaction, so apply its statements inside ours.
+	migration := strings.ReplaceAll(strings.ReplaceAll(schemaMigrations, "BEGIN;", ""), "COMMIT;", "")
 	if _, err = tx.Exec(ctx, migration); err != nil {
 		return nil, fmt.Errorf("shard migration: %w", err)
 	}

@@ -192,7 +192,7 @@ def main():
     overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "namespace": NS, "resources": ["../deploy/k8s/overlays/" + args.overlay], "images": [{"name": "atlas/" + name, "newTag": args.tag} for name in SERVICES]}
     if args.enable_ingestion:
         ingest = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "aggregator"},
-                  "spec": {"template": {"spec": {"containers": [{"name": "aggregator", "env": [{"name": "M2_READ_ONLY", "value": "0"}]}]}}}}
+                  "spec": {"template": {"spec": {"containers": [{"name": "aggregator", "env": [{"name": "INGESTION_DISABLED", "value": "0"}]}]}}}}
         overlay["patches"] = [{"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps(ingest)}]
     (cache / "kustomization.yaml").write_text(json.dumps(overlay, indent=2) + "\n", encoding="utf-8")
     print("Applying", args.overlay, "overlay", flush=True)

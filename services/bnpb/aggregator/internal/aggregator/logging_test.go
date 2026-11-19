@@ -93,7 +93,7 @@ func TestPollDatabaseCallsLogLatency(t *testing.T) {
 	var logs bytes.Buffer
 
 	store := newMemoryStore()
-	poller := newPoller("PVMBG", server.URL, store, make(chan Publication, 4))
+	poller := newPoller("PVMBG", server.URL, store)
 
 	poller.Log = slog.New(slog.NewJSONHandler(&logs, nil)).With("service", "aggregator")
 	if err := poller.Poll(context.Background(), "database-poll"); err != nil {

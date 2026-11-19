@@ -118,7 +118,7 @@ func (c *Cluster) prepareStore(ctx context.Context, name string, missing bool) e
 	node := c.Nodes[name]
 
 	if missing {
-		for _, sql := range []string{schema, m2Schema} {
+		for _, sql := range []string{schema, schemaMigrations, publicSchema} {
 			call, cancel := c.timeout(ctx)
 			_, err := node.Store.ingest.Exec(call, sql)
 

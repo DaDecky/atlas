@@ -18,7 +18,7 @@ import (
 )
 
 func run() error {
-	mode := flag.String("mode", "generate", "generate, placement, export-m1, load, or metrics")
+	mode := flag.String("mode", "generate", "generate, placement, export-store, load, or metrics")
 	nodeNames := flag.String("nodes", "", "comma-separated Kubernetes node names for placement")
 	namespace := flag.String("namespace", "sistem-informasi-kebencanaan-bnpb", "placement namespace")
 	placementName := flag.String("placement-name", "canonical-placement", "placement ConfigMap name")
@@ -49,10 +49,10 @@ func run() error {
 		return json.NewEncoder(os.Stdout).Encode(map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]string{"name": *placementName, "namespace": *namespace}, "data": map[string]string{"placement.json": string(raw)}})
 	}
 
-	if *mode == "export-m1" {
+	if *mode == "export-store" {
 		url := os.Getenv("DATABASE_URL")
 		if url == "" {
-			return fmt.Errorf("DATABASE_URL required for export-m1")
+			return fmt.Errorf("DATABASE_URL required for export-store")
 		}
 
 		ctx := context.Background()

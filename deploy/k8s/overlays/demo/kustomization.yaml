@@ -45,7 +45,7 @@
         "kind": "Deployment",
         "name": "aggregator"
       },
-      "patch": "[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/env/-\", \"value\": {\"name\": \"M2_READ_ONLY\", \"value\": \"1\"}}, {\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/env/-\", \"value\": {\"name\": \"M2_DATA_CONFIG\", \"value\": \"/etc/atlas/data/config.json\"}}, {\"op\": \"add\", \"path\": \"/spec/template/spec/volumes/-\", \"value\": {\"name\": \"data-config\", \"secret\": {\"secretName\": \"canonical-data-config\"}}}, {\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/volumeMounts/-\", \"value\": {\"name\": \"data-config\", \"mountPath\": \"/etc/atlas/data\", \"readOnly\": true}}]"
+      "patch": "[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/env/-\", \"value\": {\"name\": \"INGESTION_DISABLED\", \"value\": \"1\"}}, {\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/env/-\", \"value\": {\"name\": \"CLUSTER_DATA_CONFIG\", \"value\": \"/etc/atlas/data/config.json\"}}, {\"op\": \"add\", \"path\": \"/spec/template/spec/volumes/-\", \"value\": {\"name\": \"data-config\", \"secret\": {\"secretName\": \"canonical-data-config\"}}}, {\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/volumeMounts/-\", \"value\": {\"name\": \"data-config\", \"mountPath\": \"/etc/atlas/data\", \"readOnly\": true}}]"
     }
   ]
 }

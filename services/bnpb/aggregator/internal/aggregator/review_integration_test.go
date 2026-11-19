@@ -145,7 +145,8 @@ func TestWipedStoreGoesBehindAfterRecreate(t *testing.T) {
 
 	execData(t, node.Store, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`)
 	execData(t, node.Store, schema)
-	execData(t, node.Store, m2Schema)
+	execData(t, node.Store, schemaMigrations)
+	execData(t, node.Store, publicSchema)
 
 	for _, s := range node.Shards {
 		if _, err := node.Store.initShard(ctx, s.namespace); err != nil {

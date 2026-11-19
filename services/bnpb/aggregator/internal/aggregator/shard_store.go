@@ -216,7 +216,7 @@ func (s *Store) commitBatch(ctx context.Context, batch WriteBatch, checkpoint *t
 		}
 	}
 
-	changed, err := saveEvents(ctx, tx, batch.Source, batch.Events, checkpoint, batch.Now, batch.timestampsAssigned)
+	changed, err := saveEvents(ctx, tx, batch, checkpoint)
 	if err != nil {
 		return nil, err
 	}

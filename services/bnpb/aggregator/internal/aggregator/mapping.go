@@ -104,28 +104,6 @@ func severityOf(levels map[string]string, s string) (string, error) {
 	return "", fmt.Errorf("invalid alert or threat level")
 }
 
-func MapWarnings(records []Object) ([]Warning, error) {
-	out := make([]Warning, 0, len(records))
-	seen := map[string]bool{}
-
-	for _, o := range records {
-		id, w, err := mapWarning(o)
-		if err != nil {
-			return nil, err
-		}
-
-		if seen[id] {
-			return nil, fmt.Errorf("duplicate warning ID")
-		}
-
-		seen[id] = true
-
-		out = append(out, w)
-	}
-
-	return out, nil
-}
-
 func mapWarning(o Object) (string, Warning, error) {
 	id, err := textField(o, "warning_id")
 	if err != nil {

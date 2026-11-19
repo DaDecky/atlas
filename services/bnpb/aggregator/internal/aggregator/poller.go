@@ -35,7 +35,6 @@ type Poller struct {
 	FailureMarkTimeout          time.Duration
 	Client                      *http.Client
 	Store                       IngestStore
-	Pending                     chan<- Publication
 	Log                         *slog.Logger
 	PolicyFile                  string
 	Guard                       func(context.Context) error
@@ -331,14 +330,6 @@ func (p *Poller) Poll(ctx context.Context, id string) error {
 
 	if err != nil {
 		return errors.New("canonical commit failed")
-	}
-
-	for _, h := range changed {
-		select {
-		case p.Pending <- Publication{h, id}:
-		default:
-			// Durable outbox owns delivery; hints may be dropped.
-		}
 	}
 
 	p.Log.Info(

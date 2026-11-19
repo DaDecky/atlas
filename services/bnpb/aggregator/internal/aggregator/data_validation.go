@@ -6,6 +6,8 @@ import (
 	"math"
 )
 
+var sourceTypes = map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
+
 func validateBatch(b WriteBatch) error {
 	if !validSource(b.Source) || b.Now.IsZero() {
 		return errors.New("valid source and ingestion time required")
@@ -28,8 +30,7 @@ func validateBatch(b WriteBatch) error {
 			return errors.New("hazard ID differs from canonical source identity")
 		}
 
-		expected := map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
-		if h.HazardType != expected[h.Source] {
+		if h.HazardType != sourceTypes[h.Source] {
 			return errors.New("hazard type differs from source")
 		}
 

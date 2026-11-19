@@ -27,8 +27,11 @@ const columns = `hazard_id, source, source_ref_id, hazard_type, severity, area_n
 //go:embed schema.sql
 var schema string
 
-//go:embed m2_schema.sql
-var m2Schema string
+//go:embed schema_migrations.sql
+var schemaMigrations string
+
+//go:embed public_schema.sql
+var publicSchema string
 
 func openPool(ctx context.Context, url string, size int32, connectTimeout time.Duration) (*pgxpool.Pool, error) {
 	c, err := pgxpool.ParseConfig(url)
@@ -71,9 +74,11 @@ func OpenStore(ctx context.Context, url string, ingestSize, querySize int32, con
 		return nil, err
 	}
 
-	if _, err = i.Exec(ctx, m2Schema); err != nil {
-		s.Close()
-		return nil, err
+	for _, sql := range []string{schemaMigrations, publicSchema} {
+		if _, err = i.Exec(ctx, sql); err != nil {
+			s.Close()
+			return nil, err
+		}
 	}
 	// Persisted data survives restart, but freshness needs a new successful poll.
 	const markStale = `UPDATE source_progress SET stale_since = COALESCE(stale_since, last_success_at, now())`
@@ -182,7 +187,7 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 	}
 	defer tx.Rollback(ctx)
 
-	changed, err := saveEvents(ctx, tx, source, events, checkpoint, now)
+	changed, err := saveEvents(ctx, tx, WriteBatch{Source: source, Events: events, Now: now}, checkpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -194,14 +199,12 @@ func (s *Store) Save(ctx context.Context, source string, events []HazardEvent, c
 	return changed, nil
 }
 
-func saveEvents(ctx context.Context, tx pgx.Tx, source string, events []HazardEvent, checkpoint *time.Time, now time.Time, assigned ...bool) (
-	[]HazardEvent,
-	error,
-) {
+func saveEvents(ctx context.Context, tx pgx.Tx, batch WriteBatch, checkpoint *time.Time) ([]HazardEvent, error) {
+	source, now := batch.Source, batch.Now
 	changed := []HazardEvent{}
 
-	normalized := append([]HazardEvent(nil), events...)
-	if len(assigned) == 0 || !assigned[0] {
+	normalized := append([]HazardEvent(nil), batch.Events...)
+	if !batch.timestampsAssigned {
 		if err := normalizeEvents(ctx, tx, normalized); err != nil {
 			return nil, err
 		}

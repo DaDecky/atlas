@@ -259,7 +259,7 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 		}
 
 		if newest == nil || !h.OccurredAt.Before(*newest) {
-			if _, err = saveEvents(ctx, tx, source, []HazardEvent{h}, nil, time.Now().UTC()); err != nil {
+			if _, err = saveEvents(ctx, tx, WriteBatch{Source: source, Events: []HazardEvent{h}, Now: time.Now().UTC()}, nil); err != nil {
 				return 0, err
 			}
 		}

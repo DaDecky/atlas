@@ -46,12 +46,7 @@ func TestIntegrationSavePublishProcessCrash(t *testing.T) {
 		}
 		defer s.Close()
 
-		p := newPoller(
-			"PVMBG",
-			os.Getenv("ATLAS_CRASH_SOURCE_URL"),
-			crashAfterCommitStore{s},
-			make(chan Publication, 4),
-		)
+		p := newPoller("PVMBG", os.Getenv("ATLAS_CRASH_SOURCE_URL"), crashAfterCommitStore{s})
 		if err := p.Poll(ctx, "crash-after-commit"); err != nil {
 			t.Fatal(err)
 		}
@@ -148,32 +143,34 @@ func TestIntegrationSavePublishProcessCrash(t *testing.T) {
 	}
 
 	lostID := data.Data[0].HazardID
-	pending := make(chan Publication, 4)
+	seen := map[string]bool{}
+	_ = newOutboxEvents(t, restarted, seen)
 
-	p := newPoller("PVMBG", source.URL, restarted, pending)
+	p := newPoller("PVMBG", source.URL, restarted)
 	if err = p.Poll(ctx, "restart-overlap"); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 0 {
+	if queued := newOutboxEvents(t, restarted, seen); len(queued) != 0 {
 		t.Fatal("unexpected replay of committed event")
 	}
 
 	if _, ok, err := ch.Get(q.Name, true); err != nil || ok {
 		t.Fatal("unexpected publication of crash event", ok, err)
 	}
-	// A subsequent new event does publish: recovery works, but the old gap remains.
+	// A later new event queues its own outbox row.
 	recovered.Store(true)
 
 	if err = p.Poll(ctx, "post-crash-control"); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 1 {
-		t.Fatal("new event not queued", len(pending))
+	queued := newOutboxEvents(t, restarted, seen)
+	if len(queued) != 1 {
+		t.Fatal("new event not queued", len(queued))
 	}
 
-	item := <-pending
+	item := Publication{Event: queued[0], CorrelationID: "post-crash-control"}
 	if item.Event.HazardID == lostID {
 		t.Fatal("control reused crash event")
 	}

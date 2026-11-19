@@ -28,14 +28,6 @@ type EventPublisher interface {
 	Close()
 }
 
-type PublishWorker struct {
-	Publisher        EventPublisher
-	Pending          <-chan Publication
-	Timeout, Backoff time.Duration
-	Retries          int
-	Log              *slog.Logger
-}
-
 const Exchange = "hazard.events"
 
 func (p *RabbitPublisher) Close() {
@@ -177,64 +169,4 @@ func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchang
 	_ = p.socket.SetDeadline(time.Time{})
 
 	return nil
-}
-
-func (w *PublishWorker) send(ctx context.Context, item Publication) bool {
-	for attempt := 0; attempt <= w.Retries; attempt++ {
-		if ctx.Err() != nil {
-			return false
-		}
-
-		if attempt > 0 && !pause(ctx, w.Backoff*time.Duration(1<<(attempt-1))) {
-			return false
-		}
-
-		callCtx, cancel := context.WithTimeout(ctx, w.Timeout)
-		start := time.Now()
-		err := w.Publisher.Publish(callCtx, item)
-
-		cancel()
-		w.Log.Info(
-			"broker_call",
-			"correlation_id", item.CorrelationID,
-			"hazard_id", item.Event.HazardID,
-			"revision", item.Event.Revision,
-			"source", item.Event.Source,
-			"dependency", "rabbitmq",
-			"latency_ms", time.Since(start).Milliseconds(),
-			"attempt", attempt+1,
-			"confirmed", err == nil,
-		)
-
-		if err == nil {
-			return true
-		}
-	}
-
-	w.Log.Error(
-		"publication_dropped",
-		"hazard_id", item.Event.HazardID,
-		"revision", item.Event.Revision,
-		"correlation_id", item.CorrelationID,
-		"reason", "retries_exhausted",
-	)
-
-	return false
-}
-
-func (w *PublishWorker) Run(ctx context.Context) {
-	defer w.Publisher.Close()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case item, ok := <-w.Pending:
-			if !ok {
-				return
-			}
-
-			w.send(ctx, item)
-		}
-	}
 }
