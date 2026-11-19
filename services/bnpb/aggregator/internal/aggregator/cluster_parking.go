@@ -76,6 +76,8 @@ func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, li
 		requested = []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"}
 	}
 
+	var cutoff *ParkedMessage
+
 	for _, src := range requested {
 		var page ParkingPage
 		// Local cursor filters the same global timestamp/ID, but binds the source.
@@ -94,6 +96,12 @@ func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, li
 		}
 
 		out.Items = append(out.Items, page.Items...)
+		if page.NextCursor != nil && len(page.Items) > 0 {
+			last := page.Items[len(page.Items)-1]
+			if cutoff == nil || last.ReceivedAt.Before(cutoff.ReceivedAt) || last.ReceivedAt.Equal(cutoff.ReceivedAt) && last.MessageID < cutoff.MessageID {
+				cutoff = &last
+			}
+		}
 	}
 
 	sort.Slice(out.Items, func(i, j int) bool {
@@ -105,14 +113,28 @@ func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, li
 		return a.ReceivedAt.Before(b.ReceivedAt)
 	})
 
+	if cutoff != nil {
+		end := 0
+		for end < len(out.Items) {
+			message := out.Items[end]
+			if message.ReceivedAt.After(cutoff.ReceivedAt) || message.ReceivedAt.Equal(cutoff.ReceivedAt) && message.MessageID > cutoff.MessageID {
+				break
+			}
+
+			end++
+		}
+
+		out.Items = out.Items[:end]
+	}
+
 	more := len(out.Items) > limit
 	if more {
 		out.Items = out.Items[:limit]
 	}
 	// An exactly full merged page may still have more items; returning one extra
 	// empty page is safe and avoids skipping per-source continuation.
-	if len(out.Items) == limit {
-		last := out.Items[limit-1]
+	if len(out.Items) > 0 && (len(out.Items) == limit || cutoff != nil) {
+		last := out.Items[len(out.Items)-1]
 		after.Time = last.ReceivedAt
 		after.ID = last.MessageID
 		after.Source = source
@@ -148,7 +170,20 @@ func (c *Cluster) replay(ctx context.Context, source string, epoch int64, limit 
 		return 0, ErrStaleEpoch
 	}
 
-	page, err := c.ListUnprocessed(ctx, source, "", limit)
+	var page ParkingPage
+
+	if dueOnly {
+		err = c.metadata(ctx, source, func(s *Store) error {
+			var inner error
+
+			page.Items, inner = s.dueParking(ctx, source, limit)
+
+			return inner
+		})
+	} else {
+		page, err = c.ListUnprocessed(ctx, source, "", limit)
+	}
+
 	if err != nil {
 		return 0, err
 	}

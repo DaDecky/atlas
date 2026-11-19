@@ -44,6 +44,10 @@ type Parking interface {
 
 const parkingColumns = `message_id,source,received_at,source_ref_id,raw,raw_length,raw_sha256,raw_cut,reason_code,reason,retryable,attempts,next_attempt_at,status,correlation_id`
 
+// Row limits alone allow 1000 four-MiB records to exhaust a 512-MiB pod.
+// A short page still has a cursor; replay callers can request another batch.
+const MaxParkingBatchBytes = 8 << 20
+
 func scanParked(row pgx.Row) (ParkedMessage, error) {
 	var m ParkedMessage
 
@@ -119,6 +123,8 @@ func (s *Store) ListUnprocessed(ctx context.Context, source, cursor string, limi
 		return page, err
 	}
 
+	used, more := 0, false
+
 	for rows.Next() {
 		m, err := scanParked(rows)
 		if err != nil {
@@ -126,6 +132,12 @@ func (s *Store) ListUnprocessed(ctx context.Context, source, cursor string, limi
 			return page, err
 		}
 
+		if len(page.Items) == limit || len(page.Items) > 0 && used+len(m.Raw) > MaxParkingBatchBytes {
+			more = true
+			break
+		}
+
+		used += len(m.Raw)
 		page.Items = append(page.Items, m)
 	}
 
@@ -136,9 +148,8 @@ func (s *Store) ListUnprocessed(ctx context.Context, source, cursor string, limi
 		return page, err
 	}
 
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		last := page.Items[limit-1]
+	if more {
+		last := page.Items[len(page.Items)-1]
 		after.Time = last.ReceivedAt
 		after.ID = last.MessageID
 		after.Source = source
@@ -179,26 +190,7 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 		return 0, ErrStaleEpoch
 	}
 
-	rows, err := tx.Query(ctx, `SELECT `+parkingColumns+` FROM unprocessed_messages WHERE source=$1 AND status<>'recovered' ORDER BY received_at,message_id LIMIT $2 FOR UPDATE`, source, limit)
-	if err != nil {
-		return 0, err
-	}
-
-	pending := []ParkedMessage{}
-
-	for rows.Next() {
-		m, err := scanParked(rows)
-		if err != nil {
-			rows.Close()
-			return 0, err
-		}
-
-		pending = append(pending, m)
-	}
-
-	err = rows.Err()
-	rows.Close()
-
+	pending, err := pendingParking(ctx, tx, source, limit, dueOnly, true)
 	if err != nil {
 		return 0, err
 	}
@@ -265,6 +257,56 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 	}
 
 	return recovered, tx.Commit(ctx)
+}
+
+func pendingParking(ctx context.Context, tx pgx.Tx, source string, limit int, dueOnly, lock bool) ([]ParkedMessage, error) {
+	query := `SELECT ` + parkingColumns + ` FROM unprocessed_messages m WHERE m.source=$1 AND m.status<>'recovered'
+ AND (NOT $3 OR (m.status='retrying' AND m.next_attempt_at<=now() AND NOT EXISTS(
+ SELECT 1 FROM unprocessed_messages p WHERE p.source=m.source AND p.source_ref_id=m.source_ref_id
+ AND p.status<>'recovered' AND (p.received_at,p.message_id)<(m.received_at,m.message_id))))
+ ORDER BY m.received_at,m.message_id LIMIT $2`
+	if lock {
+		query += " FOR UPDATE"
+	}
+
+	rows, err := tx.Query(ctx, query, source, limit, dueOnly)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	pending, used := []ParkedMessage{}, 0
+
+	for rows.Next() {
+		message, err := scanParked(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(pending) > 0 && used+len(message.Raw) > MaxParkingBatchBytes {
+			break
+		}
+
+		used += len(message.Raw)
+		pending = append(pending, message)
+	}
+
+	return pending, rows.Err()
+}
+
+func (s *Store) dueParking(ctx context.Context, source string, limit int) ([]ParkedMessage, error) {
+	tx, err := s.begin(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	items, err := pendingParking(ctx, tx, source, limit, true, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return items, tx.Commit(ctx)
 }
 
 // RunParkingRetries is started by the source leadership owner and stopped on

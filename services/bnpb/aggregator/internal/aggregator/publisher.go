@@ -16,6 +16,7 @@ import (
 type RabbitPublisher struct {
 	URL     string
 	Timeout time.Duration
+	Log     *slog.Logger
 	conn    *amqp.Connection
 	channel *amqp.Channel
 	socket  net.Conn
@@ -105,7 +106,24 @@ func (p *RabbitPublisher) PublishCritical(ctx context.Context, item Publication)
 	return p.publish(ctx, item, "", "field.alerts")
 }
 
-func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchange, key string) error {
+func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchange, key string) (err error) {
+	start := time.Now()
+
+	defer func() {
+		if p.Log != nil {
+			p.Log.Info("broker_call",
+				"correlation_id", item.CorrelationID,
+				"hazard_id", item.Event.HazardID,
+				"revision", item.Event.Revision,
+				"source", item.Event.Source,
+				"dependency", "rabbitmq",
+				"exchange", exchange,
+				"routing_key", key,
+				"latency_ms", time.Since(start).Milliseconds(),
+				"confirmed", err == nil)
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(ctx, p.Timeout)
 	defer cancel()
 

@@ -32,6 +32,25 @@ type Cluster struct {
 var _ ShardStore = (*Cluster)(nil)
 
 func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
+	// A fresh Kubernetes rollout can initialize the same node concurrently.
+	// CREATE TABLE IF NOT EXISTS alone does not serialize PostgreSQL catalogue
+	// inserts. Hold a node-local bootstrap lock across the base and shard DDL.
+	bootstrap, err := pgx.Connect(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	defer bootstrap.Close(context.Background())
+
+	guard, err := bootstrap.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer guard.Rollback(context.Background())
+
+	if _, err = guard.Exec(ctx, `SELECT pg_advisory_xact_lock(419031,4)`); err != nil {
+		return nil, err
+	}
+
 	s, err := OpenStore(ctx, url, 4, 8)
 	if err != nil {
 		return nil, err

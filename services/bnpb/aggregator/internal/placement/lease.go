@@ -102,7 +102,8 @@ func (l *Lease) Acquire(ctx context.Context) error {
 	document.Metadata.Name = l.Name
 	document.Spec.HolderIdentity = l.Holder
 	document.Spec.LeaseDurationSeconds = int(duration / time.Second)
-	document.Spec.RenewTime = time.Now().UTC().Format(time.RFC3339Nano)
+	// Kubernetes MicroTime requires exactly six fractional digits on the wire.
+	document.Spec.RenewTime = time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
 
 	raw, err := json.Marshal(document)
 	if err != nil {
