@@ -82,6 +82,7 @@ def main():
     global NS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--overlay", choices=["dev", "demo"], default="dev")
+    parser.add_argument("--enable-ingestion", action="store_true", help="run lease-managed ingestion on the replicated demo topology")
     parser.add_argument("--kubeconfig")
     parser.add_argument("--context")
     parser.add_argument("--namespace", default=NS, help="isolated namespace for a dev deployment")
@@ -91,6 +92,8 @@ def main():
     parser.add_argument("--kind-cluster", help="import images into an existing kind cluster")
     parser.add_argument("--tag", default="m2-" + datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S"))
     args = parser.parse_args()
+    if args.enable_ingestion and args.overlay != "demo":
+        parser.error("--enable-ingestion requires --overlay demo")
     if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", args.namespace):
         parser.error("namespace must be a Kubernetes DNS label")
     NS = args.namespace
@@ -171,7 +174,11 @@ def main():
     secret("auth-credentials", auth)
     aggregator = selected("BMKG_API_KEY", "PVMBG_TOKEN", "AGGREGATOR_INTERNAL_TOKEN", "AUDIT_TOKEN")
     aggregator.update(DATABASE_URL=db("aggregator", values["CANONICAL_DB_PASSWORD"], "canonical-store-0.canonical-store", "canonical"), RABBITMQ_URL=broker)
-    config("aggregator-config", {"POLL_INTERVAL": values.get("POLL_INTERVAL", ""), "BMKG_BASE_URL": "http://bmkg:8081", "PVMBG_BASE_URL": "http://pvmbg:8082"})
+    settings = {"POLL_INTERVAL": values.get("POLL_INTERVAL", ""), "BMKG_BASE_URL": "http://bmkg:8081", "PVMBG_BASE_URL": "http://pvmbg:8082"}
+    for name in ["SOURCE_LEASE_DURATION", "SOURCE_LEASE_RENEW_DEADLINE", "SOURCE_LEASE_RETRY_PERIOD"]:
+        if values.get(name):
+            settings[name] = values[name]
+    config("aggregator-config", settings)
     if values.get("SATELLITE_TOKEN"):
         aggregator["SATELLITE_TOKEN"] = values["SATELLITE_TOKEN"]
     secret("aggregator-credentials", aggregator)
@@ -183,6 +190,10 @@ def main():
         secret(name + "-credentials", {"AMQP_URL": broker})
     secret("pantai-token", {"token": values["PANTAI_AUTH_TOKEN"]})
     overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "namespace": NS, "resources": ["../deploy/k8s/overlays/" + args.overlay], "images": [{"name": "atlas/" + name, "newTag": args.tag} for name in SERVICES]}
+    if args.enable_ingestion:
+        ingest = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "aggregator"},
+                  "spec": {"template": {"spec": {"containers": [{"name": "aggregator", "env": [{"name": "M2_READ_ONLY", "value": "0"}]}]}}}}
+        overlay["patches"] = [{"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps(ingest)}]
     (cache / "kustomization.yaml").write_text(json.dumps(overlay, indent=2) + "\n", encoding="utf-8")
     print("Applying", args.overlay, "overlay", flush=True)
     print(run(kube + ["apply", "-k", str(cache)]).decode(), flush=True)
@@ -211,7 +222,7 @@ def main():
     (cache / "last-deploy.json").write_text(json.dumps({"tag": args.tag, "overlay": args.overlay, "namespace": NS}, indent=2) + "\n", encoding="utf-8")
     print("Deployment ready:", args.overlay, "tag", args.tag, flush=True)
     if args.overlay == "demo":
-        print("Three replicated data stores and read replicas active; source ingestion awaits source-leadership integration.", flush=True)
+        print("Three replicated data stores active; lease-managed ingestion " + ("enabled" if args.enable_ingestion else "disabled") + ".", flush=True)
 
 
 if __name__ == "__main__":
