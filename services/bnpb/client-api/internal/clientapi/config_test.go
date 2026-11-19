@@ -44,6 +44,29 @@ func validTestEnv(t *testing.T) {
 	}
 }
 
+func TestConfigLimitsOverrideAndBounds(t *testing.T) {
+	validTestEnv(t)
+
+	t.Setenv("AGGREGATOR_MAX_RESPONSE_BYTES", "131072")
+	t.Setenv("MAX_RETRY_AFTER", "10m")
+	t.Setenv("HTTP_READ_TIMEOUT", "7s")
+
+	c, err := ConfigFromEnv()
+	if err != nil || c.MaxResponseBytes != 131072 || c.MaxRetryAfter != 10*time.Minute || c.HTTPReadTimeout != 7*time.Second {
+		t.Fatal(c, err)
+	}
+
+	for key, value := range map[string]string{"AGGREGATOR_MAX_RESPONSE_BYTES": "10", "MAX_RETRY_AFTER": "48h", "SHUTDOWN_TIMEOUT": "0s"} {
+		t.Setenv(key, value)
+
+		if _, err = ConfigFromEnv(); err == nil {
+			t.Fatal(key, "accepted")
+		}
+
+		t.Setenv(key, "")
+	}
+}
+
 func TestConfigDefaultsAndRejection(t *testing.T) {
 	validTestEnv(t)
 
