@@ -1,0 +1,179 @@
+{
+  "version": "geoboundaries-IDN-ADM1-65028918-2017-planar-centroids",
+  "source": "https://github.com/wmgeolab/geoBoundaries/raw/9469f09/releaseData/gbOpen/IDN/ADM1/geoBoundaries-IDN-ADM1_simplified.geojson",
+  "source_sha256": "5a6be3d1484166132751fe535dd164e1491e657f2d38dced177f067a7bc00d8f",
+  "license": "ODbL-1.0",
+  "attribution": "OpenStreetMap contributors, Wambacher; distributed by geoBoundaries",
+  "provinces": [
+    {
+      "name": "Aceh",
+      "latitude": 4.2256617,
+      "longitude": 96.90964344
+    },
+    {
+      "name": "Bali",
+      "latitude": -8.36906467,
+      "longitude": 115.13207921
+    },
+    {
+      "name": "Bangka-Belitung Islands",
+      "latitude": -2.42065288,
+      "longitude": 106.57247178
+    },
+    {
+      "name": "Banten",
+      "latitude": -6.45633367,
+      "longitude": 106.1095645
+    },
+    {
+      "name": "Bengkulu",
+      "latitude": -3.58887635,
+      "longitude": 102.38333079
+    },
+    {
+      "name": "Central Java",
+      "latitude": -7.26220213,
+      "longitude": 110.22632737
+    },
+    {
+      "name": "Central Kalimantan",
+      "latitude": -1.59982582,
+      "longitude": 113.41673047
+    },
+    {
+      "name": "Central Sulawesi",
+      "latitude": -0.98268329,
+      "longitude": 121.19271938
+    },
+    {
+      "name": "East Java",
+      "latitude": -7.72080523,
+      "longitude": 112.72520499
+    },
+    {
+      "name": "East Kalimantan",
+      "latitude": 0.45289364,
+      "longitude": 116.47454774
+    },
+    {
+      "name": "East Nusa Tenggara",
+      "latitude": -9.25920262,
+      "longitude": 122.17939668
+    },
+    {
+      "name": "Gorontalo",
+      "latitude": 0.68623463,
+      "longitude": 122.37885623
+    },
+    {
+      "name": "Jakarta Special Capital Region",
+      "latitude": -6.20774413,
+      "longitude": 106.83805278
+    },
+    {
+      "name": "Jambi",
+      "latitude": -1.69794752,
+      "longitude": 102.72162428
+    },
+    {
+      "name": "Lampung",
+      "latitude": -4.91769998,
+      "longitude": 105.0221614
+    },
+    {
+      "name": "Maluku",
+      "latitude": -4.74193882,
+      "longitude": 129.84762443
+    },
+    {
+      "name": "North Kalimantan",
+      "latitude": 2.89429368,
+      "longitude": 116.22464148
+    },
+    {
+      "name": "North Maluku",
+      "latitude": 0.21437776,
+      "longitude": 127.54007732
+    },
+    {
+      "name": "North Sulawesi",
+      "latitude": 1.25873889,
+      "longitude": 124.52220196
+    },
+    {
+      "name": "North Sumatra",
+      "latitude": 2.18991333,
+      "longitude": 99.05529564
+    },
+    {
+      "name": "Papua",
+      "latitude": -4.65386145,
+      "longitude": 138.66247398
+    },
+    {
+      "name": "Riau",
+      "latitude": 0.50938036,
+      "longitude": 101.82311823
+    },
+    {
+      "name": "Riau Islands",
+      "latitude": 1.49082936,
+      "longitude": 105.40741908
+    },
+    {
+      "name": "South Kalimantan",
+      "latitude": -3.00019054,
+      "longitude": 115.43567784
+    },
+    {
+      "name": "South Sulawesi",
+      "latitude": -3.70506222,
+      "longitude": 120.16920151
+    },
+    {
+      "name": "South Sumatra",
+      "latitude": -3.20437286,
+      "longitude": 104.17848859
+    },
+    {
+      "name": "Southeast Sulawesi",
+      "latitude": -4.11393112,
+      "longitude": 122.07319691
+    },
+    {
+      "name": "Special Region of Yogyakarta",
+      "latitude": -7.89518776,
+      "longitude": 110.4457736
+    },
+    {
+      "name": "West Java",
+      "latitude": -6.92428058,
+      "longitude": 107.62247449
+    },
+    {
+      "name": "West Kalimantan",
+      "latitude": -0.08510709,
+      "longitude": 111.12207987
+    },
+    {
+      "name": "West Nusa Tenggara",
+      "latitude": -8.60593394,
+      "longitude": 117.50890942
+    },
+    {
+      "name": "West Papua",
+      "latitude": -2.01446704,
+      "longitude": 132.93768057
+    },
+    {
+      "name": "West Sulawesi",
+      "latitude": -2.46249362,
+      "longitude": 119.33974966
+    },
+    {
+      "name": "West Sumatra",
+      "latitude": -0.83589386,
+      "longitude": 100.46167946
+    }
+  ]
+}
