@@ -1,3 +1,7 @@
+-- Replicas can bootstrap the same fresh database at the same time.
+BEGIN;
+SELECT pg_advisory_xact_lock(419031, 5);
+
 CREATE TABLE IF NOT EXISTS sessions (
     session_id         uuid        PRIMARY KEY,
     client_id          text        NOT NULL,
@@ -9,3 +13,5 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS sessions_client_id ON sessions (client_id);
+
+COMMIT;

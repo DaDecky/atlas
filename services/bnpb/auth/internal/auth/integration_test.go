@@ -3,12 +3,91 @@ package auth
 import (
 	"context"
 	"crypto/sha256"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
+
+func TestIntegrationConcurrentAuthReplicasInitializeFreshSchema(t *testing.T) {
+	database := os.Getenv("AUTH_TEST_DATABASE_URL")
+	if database == "" {
+		t.Skip("AUTH_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	conn, err := pgx.Connect(ctx, database)
+	if err != nil {
+		t.Fatal("integration database unavailable")
+	}
+	defer conn.Close(context.Background())
+
+	namespace := pgx.Identifier{"auth_bootstrap_" + strings.ReplaceAll(newSessionID(), "-", "")}
+	if _, err = conn.Exec(ctx, "CREATE SCHEMA "+namespace.Sanitize()); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Exec(context.Background(), "DROP SCHEMA "+namespace.Sanitize()+" CASCADE")
+
+	target, err := url.Parse(database)
+	if err != nil {
+		t.Fatal("invalid integration database URL")
+	}
+
+	query := target.Query()
+	query.Set("search_path", namespace[0])
+	target.RawQuery = query.Encode()
+
+	start := make(chan struct{})
+	results := make(chan *Store, 4)
+
+	for range cap(results) {
+		go func() {
+			<-start
+
+			replica, openErr := OpenStore(ctx, target.String(), defaultDBPoolSize, defaultDBConnectTimeout)
+			if openErr != nil {
+				t.Error(openErr)
+			}
+
+			results <- replica
+		}()
+	}
+
+	close(start)
+
+	var replicas []*Store
+
+	for range cap(results) {
+		if replica := <-results; replica != nil {
+			replicas = append(replicas, replica)
+			defer replica.Close()
+		}
+	}
+
+	if len(replicas) != cap(results) {
+		t.Fatal("some replicas did not initialize the Auth schema")
+	}
+
+	session := newSessionID()
+
+	refresh := sha256.Sum256([]byte("replica-bootstrap"))
+	if err = replicas[0].Create(ctx, session, "bootstrap-test", refresh[:], time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, replica := range replicas[1:] {
+		if ok, validateErr := replica.Validate(ctx, session, 1); !ok || validateErr != nil {
+			t.Fatalf("replica did not see the shared session: active=%v err=%v", ok, validateErr)
+		}
+	}
+}
 
 func TestIntegrationSessionSurvivesAuthStoreRestart(t *testing.T) {
 	url := os.Getenv("AUTH_TEST_DATABASE_URL")
