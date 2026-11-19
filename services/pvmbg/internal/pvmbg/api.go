@@ -279,6 +279,7 @@ func (a *API) logRequest(next http.Handler) http.Handler {
 				"correlation_id", id,
 				"method", r.Method,
 				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
 				"status", logged.status,
 				"latency_ms", time.Since(start).Milliseconds(),
 			)
