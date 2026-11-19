@@ -303,19 +303,8 @@ func (c *Cluster) CommitState(ctx context.Context, b WriteBatch, s StreamState) 
 }
 
 func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time, state *StreamState) ([]HazardEvent, error) {
-	if err := validateBatch(b); err != nil {
+	if err := checkWrite(b, checkpoint, state); err != nil {
 		return nil, err
-	}
-
-	if checkpoint != nil && checkpoint.IsZero() {
-		return nil, errors.New("checkpoint required")
-	}
-
-	if state != nil {
-		var object map[string]json.RawMessage
-		if state.Offset < 0 || json.Unmarshal(state.Payload, &object) != nil || object == nil {
-			return nil, errors.New("invalid stream state")
-		}
 	}
 
 	if !b.sourceLocked {
@@ -351,21 +340,8 @@ func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time
 	}
 	// Events commit idempotently before progress; an interrupted distributed batch
 	// resumes from prior state. It is not a distributed SQL transaction.
-	groups := map[string][]HazardEvent{}
-
-	for _, e := range b.Events {
-		key := placement.Shard(e.HazardID)
-		groups[key] = append(groups[key], e)
-	}
-
+	groups, keys := shardGroups(b.Events)
 	changed := map[string]HazardEvent{}
-
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
-	}
-
-	sort.Strings(keys)
 
 	for _, shard := range keys {
 		part := b
@@ -624,4 +600,43 @@ func (c *Cluster) lockSource(ctx context.Context, source string) (func(), error)
 	}
 
 	return nil, errors.New("source coordination unavailable")
+}
+
+func checkWrite(b WriteBatch, checkpoint *time.Time, state *StreamState) error {
+	if err := validateBatch(b); err != nil {
+		return err
+	}
+
+	if checkpoint != nil && checkpoint.IsZero() {
+		return errors.New("checkpoint required")
+	}
+
+	if state != nil {
+		var object map[string]json.RawMessage
+		if state.Offset < 0 || json.Unmarshal(state.Payload, &object) != nil || object == nil {
+			return errors.New("invalid stream state")
+		}
+	}
+
+	return nil
+}
+
+// shardGroups splits events by shard and returns the shards in a fixed order, so
+// concurrent writers lock copies in the same order.
+func shardGroups(events []HazardEvent) (map[string][]HazardEvent, []string) {
+	groups := map[string][]HazardEvent{}
+
+	for _, e := range events {
+		key := placement.Shard(e.HazardID)
+		groups[key] = append(groups[key], e)
+	}
+
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	return groups, keys
 }

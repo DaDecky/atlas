@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -97,6 +98,8 @@ func (c *Cluster) Refill(ctx context.Context, shard, target string) error {
 	return c.swapPlacement(ctx, v, t)
 }
 
+// copyShard copies every table of a shard from one snapshot, so the events, state, and
+// checkpoints that reach the target agree with each other.
 func copyShard(ctx context.Context, from, to *Store) error {
 	tx, err := from.begin(ctx, true)
 	if err != nil {
@@ -104,34 +107,24 @@ func copyShard(ctx context.Context, from, to *Store) error {
 	}
 	defer tx.Rollback(ctx)
 
+	for _, step := range []func(context.Context, pgx.Tx, *Store) error{
+		copyEvents, copyPendingPublications, copyParkedPublications, copyStreamState, copyParking, copyFieldReports, copyProgress,
+	} {
+		if err = step(ctx, tx, to); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func copyEvents(ctx context.Context, tx pgx.Tx, to *Store) error {
 	after := ""
+
 	for {
-		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM hazard_events WHERE hazard_id COLLATE "C" > $1 ORDER BY hazard_id COLLATE "C" LIMIT 100`, after)
-		if err != nil {
+		batch, err := queryPage(ctx, tx, `SELECT `+columns+` FROM hazard_events WHERE hazard_id COLLATE "C" > $1 ORDER BY hazard_id COLLATE "C" LIMIT 100`, after, scanEvent)
+		if err != nil || len(batch) == 0 {
 			return err
-		}
-
-		batch := []HazardEvent{}
-
-		for rows.Next() {
-			h, err := scanEvent(rows)
-			if err != nil {
-				rows.Close()
-				return err
-			}
-
-			batch = append(batch, h)
-		}
-
-		err = rows.Err()
-		rows.Close()
-
-		if err != nil {
-			return err
-		}
-
-		if len(batch) == 0 {
-			break
 		}
 
 		if err = to.restoreEvents(ctx, batch); err != nil {
@@ -140,74 +133,15 @@ func copyShard(ctx context.Context, from, to *Store) error {
 
 		after = batch[len(batch)-1].HazardID
 	}
+}
 
-	if err = copyPendingPublications(ctx, tx, to); err != nil {
-		return err
-	}
+func copyParking(ctx context.Context, tx pgx.Tx, to *Store) error {
+	after := ""
 
-	if err = copyParkedPublications(ctx, tx, to); err != nil {
-		return err
-	}
-
-	// State and checkpoint use the same snapshot as the copied events. Updates on
-	// the target keep the greater offset/checkpoint if a live commit raced refill.
-	stateRows, err := tx.Query(ctx, `SELECT source,committed_offset,payload FROM stream_state`)
-	if err != nil {
-		return err
-	}
-
-	for stateRows.Next() {
-		var (
-			source string
-			offset int64
-			raw    []byte
-		)
-		if err = stateRows.Scan(&source, &offset, &raw); err != nil {
-			stateRows.Close()
-			return err
-		}
-
-		if err = to.restoreState(ctx, source, offset, raw); err != nil {
-			stateRows.Close()
-			return err
-		}
-	}
-
-	err = stateRows.Err()
-	stateRows.Close()
-
-	if err != nil {
-		return err
-	}
-
-	afterMessage := ""
 	for {
-		parkingRows, err := tx.Query(ctx, `SELECT `+parkingColumns+` FROM unprocessed_messages WHERE message_id>$1 ORDER BY message_id LIMIT 100`, afterMessage)
-		if err != nil {
+		batch, err := queryPage(ctx, tx, `SELECT `+parkingColumns+` FROM unprocessed_messages WHERE message_id>$1 ORDER BY message_id LIMIT 100`, after, scanParked)
+		if err != nil || len(batch) == 0 {
 			return err
-		}
-
-		batch := []ParkedMessage{}
-
-		for parkingRows.Next() {
-			m, err := scanParked(parkingRows)
-			if err != nil {
-				parkingRows.Close()
-				return err
-			}
-
-			batch = append(batch, m)
-		}
-
-		err = parkingRows.Err()
-		parkingRows.Close()
-
-		if err != nil {
-			return err
-		}
-
-		if len(batch) == 0 {
-			break
 		}
 
 		for _, m := range batch {
@@ -216,44 +150,96 @@ func copyShard(ctx context.Context, from, to *Store) error {
 			}
 		}
 
-		afterMessage = batch[len(batch)-1].MessageID
+		after = batch[len(batch)-1].MessageID
+	}
+}
+
+// queryPage reads one keyset page and closes its rows before the caller writes elsewhere.
+func queryPage[T any](ctx context.Context, tx pgx.Tx, sql, after string, scan func(pgx.Row) (T, error)) ([]T, error) {
+	rows, err := tx.Query(ctx, sql, after)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	page := []T{}
+
+	for rows.Next() {
+		item, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		page = append(page, item)
 	}
 
-	reports, err := tx.Query(ctx, `SELECT report_id,payload,received_at FROM field_reports_inbox ORDER BY report_id`)
+	return page, rows.Err()
+}
+
+// copyStreamState uses the snapshot of the copied events. The target keeps the greater
+// offset if a live commit raced the refill.
+func copyStreamState(ctx context.Context, tx pgx.Tx, to *Store) error {
+	rows, err := tx.Query(ctx, `SELECT source,committed_offset,payload FROM stream_state`)
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 
-	for reports.Next() {
+	for rows.Next() {
+		var (
+			source string
+			offset int64
+			raw    []byte
+		)
+
+		if err = rows.Scan(&source, &offset, &raw); err != nil {
+			return err
+		}
+
+		if err = to.restoreState(ctx, source, offset, raw); err != nil {
+			return err
+		}
+	}
+
+	return rows.Err()
+}
+
+func copyFieldReports(ctx context.Context, tx pgx.Tx, to *Store) error {
+	rows, err := tx.Query(ctx, `SELECT report_id,payload,received_at FROM field_reports_inbox ORDER BY report_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
 		var (
 			id       string
 			payload  []byte
 			received time.Time
 		)
-		if err = reports.Scan(&id, &payload, &received); err != nil {
-			reports.Close()
+
+		if err = rows.Scan(&id, &payload, &received); err != nil {
 			return err
 		}
 
 		if err = to.restoreFieldReport(ctx, id, payload, received); err != nil {
-			reports.Close()
 			return err
 		}
 	}
 
-	err = reports.Err()
-	reports.Close()
+	return rows.Err()
+}
 
-	if err != nil {
-		return err
-	}
-
+// copyProgress keeps the later checkpoint and success time on the target.
+func copyProgress(ctx context.Context, tx pgx.Tx, to *Store) error {
 	for _, source := range Sources {
 		var (
 			progress   Freshness
 			checkpoint *time.Time
 		)
-		if err = tx.QueryRow(ctx, `SELECT checkpoint,last_success_at,stale_since FROM source_progress WHERE source=$1`, source).Scan(&checkpoint, &progress.LastSuccessAt, &progress.StaleSince); err != nil {
+
+		err := tx.QueryRow(ctx, `SELECT checkpoint,last_success_at,stale_since FROM source_progress WHERE source=$1`, source).Scan(&checkpoint, &progress.LastSuccessAt, &progress.StaleSince)
+		if err != nil {
 			return err
 		}
 
@@ -274,7 +260,7 @@ func copyShard(ctx context.Context, from, to *Store) error {
 		}
 	}
 
-	return tx.Commit(ctx)
+	return nil
 }
 
 func equalRefillDigests(source, target string) bool { return source == target }
@@ -529,58 +515,82 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 		return err
 	}
 
-	if c.Nodes[newNode] == nil {
-		return errors.New("new node is not configured")
-	}
-
-	for source, epoch := range t.WriterEpochs {
-		call, cancel := c.timeout(ctx)
-		err := c.Nodes[newNode].Store.Seal(call, source, epoch)
-
-		cancel()
-
-		if err != nil {
-			return err
-		}
-	}
-
-	call, cancel := c.timeout(ctx)
-	storeID, err := c.Nodes[newNode].Store.identity(call)
-
-	cancel()
-
+	storeID, err := c.prepareNode(ctx, t, newNode)
 	if err != nil {
 		return err
 	}
 
-	donor := false
-
-	for _, holder := range t.Shards[shard] {
-		if holder.Node != old && holder.State == placement.Serving && c.Nodes[holder.Node] != nil {
-			call, cancel := c.timeout(ctx)
-			_, err := c.copyStore(holder, shard).Read(call, Query{Limit: 1})
-
-			cancel()
-
-			if err == nil {
-				donor = true
-			}
-		}
-	}
-
-	if !donor {
+	if !c.reachableDonor(ctx, t, shard, old) {
 		return errors.New("replacement needs a reachable serving donor")
 	}
 
+	if err = replaceHolder(&t, shard, old, newNode, storeID); err != nil {
+		return err
+	}
+
+	if err = c.swapPlacement(ctx, v, t); err != nil {
+		return err
+	}
+
+	// Retain the retired copy outside placement. A paused former planner must
+	// never truncate a schema that a newer planner may already have reassigned.
+	// Physical cleanup requires its own fenced ownership protocol.
+	return c.Refill(ctx, shard, newNode)
+}
+
+// prepareNode seals every writer epoch on the new node before it can hold a copy, and returns its store identity.
+func (c *Cluster) prepareNode(ctx context.Context, t placement.Table, node string) (string, error) {
+	if c.Nodes[node] == nil {
+		return "", errors.New("new node is not configured")
+	}
+
+	for source, epoch := range t.WriterEpochs {
+		call, cancel := c.timeout(ctx)
+		err := c.Nodes[node].Store.Seal(call, source, epoch)
+
+		cancel()
+
+		if err != nil {
+			return "", err
+		}
+	}
+
+	call, cancel := c.timeout(ctx)
+	defer cancel()
+
+	return c.Nodes[node].Store.identity(call)
+}
+
+func (c *Cluster) reachableDonor(ctx context.Context, t placement.Table, shard, old string) bool {
+	for _, holder := range t.Shards[shard] {
+		if holder.Node == old || holder.State != placement.Serving || c.Nodes[holder.Node] == nil {
+			continue
+		}
+
+		call, cancel := c.timeout(ctx)
+		_, err := c.copyStore(holder, shard).Read(call, Query{Limit: 1})
+
+		cancel()
+
+		if err == nil {
+			return true
+		}
+	}
+
+	return false
+}
+
+// replaceHolder puts node in place of old as a copy that is behind until its refill.
+func replaceHolder(t *placement.Table, shard, old, node, storeID string) error {
 	found := false
 
 	for i, holder := range t.Shards[shard] {
-		if holder.Node == newNode {
+		if holder.Node == node {
 			return errors.New("node already holds shard")
 		}
 
 		if holder.Node == old {
-			t.Shards[shard][i] = placement.Copy{Node: newNode, State: placement.Behind, StoreID: storeID}
+			t.Shards[shard][i] = placement.Copy{Node: node, State: placement.Behind, StoreID: storeID}
 			found = true
 		}
 	}
@@ -589,29 +599,9 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 		return errors.New("old holder missing")
 	}
 
-	present := false
-
-	for _, n := range t.Nodes {
-		if n == newNode {
-			present = true
-		}
+	if !slices.Contains(t.Nodes, node) {
+		t.Nodes = append(t.Nodes, node)
 	}
-
-	if !present {
-		t.Nodes = append(t.Nodes, newNode)
-	}
-
-	if err = c.swapPlacement(ctx, v, t); err != nil {
-		return err
-	}
-
-	if err = c.Refill(ctx, shard, newNode); err != nil {
-		return err
-	}
-
-	// Retain the retired copy outside placement. A paused former planner must
-	// never truncate a schema that a newer planner may already have reassigned.
-	// Physical cleanup requires its own fenced ownership protocol.
 
 	return nil
 }

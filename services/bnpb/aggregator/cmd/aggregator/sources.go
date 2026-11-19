@@ -139,7 +139,7 @@ func sourcePollWork(c aggregator.Config, store runtimeData, source string, log *
 	}
 }
 
-func startSources(ctx context.Context, store runtimeData, c aggregator.Config, launch func(func(context.Context)), log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
+func startSources(ctx context.Context, store runtimeData, c aggregator.Config, launch launcher, log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
 	replay := map[string]aggregator.ReplaySource{}
 	if os.Getenv("INGESTION_DISABLED") == "1" {
 		return replay, nil

@@ -163,19 +163,7 @@ func (c *Cluster) prepareStore(ctx context.Context, name string, missing bool) e
 // RebalanceOnce uses the current healthy configured membership. Copy moves are
 // incremental, retain a serving donor, and never stop the application globally.
 func (c *Cluster) RebalanceOnce(ctx context.Context) error {
-	names := []string{}
-
-	for name, node := range c.Nodes {
-		call, cancel := c.timeout(ctx)
-		err := node.Store.Health(call)
-
-		cancel()
-
-		if err == nil {
-			names = append(names, name)
-		}
-	}
-
+	names := c.healthyNodes(ctx)
 	if len(names) < 3 {
 		return nil
 	}
@@ -192,35 +180,11 @@ func (c *Cluster) RebalanceOnce(ctx context.Context) error {
 				return err
 			}
 
-			has := false
-
-			for _, holder := range current.Shards[shard] {
-				if holder.Node == target.Node {
-					has = true
-				}
-			}
-
-			if has {
+			if holds(current.Shards[shard], target.Node) {
 				continue
 			}
 
-			old := ""
-
-			for _, holder := range current.Shards[shard] {
-				keep := false
-
-				for _, w := range want {
-					if holder.Node == w.Node {
-						keep = true
-					}
-				}
-
-				if !keep {
-					old = holder.Node
-					break
-				}
-			}
-
+			old := retiredHolder(current.Shards[shard], want)
 			if old == "" {
 				continue
 			}
@@ -232,4 +196,42 @@ func (c *Cluster) RebalanceOnce(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Cluster) healthyNodes(ctx context.Context) []string {
+	names := []string{}
+
+	for name, node := range c.Nodes {
+		call, cancel := c.timeout(ctx)
+		err := node.Store.Health(call)
+
+		cancel()
+
+		if err == nil {
+			names = append(names, name)
+		}
+	}
+
+	return names
+}
+
+func holds(copies []placement.Copy, node string) bool {
+	for _, holder := range copies {
+		if holder.Node == node {
+			return true
+		}
+	}
+
+	return false
+}
+
+// retiredHolder returns the first current holder that the desired placement no longer keeps.
+func retiredHolder(current, want []placement.Copy) string {
+	for _, holder := range current {
+		if !holds(want, holder.Node) {
+			return holder.Node
+		}
+	}
+
+	return ""
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -90,28 +91,13 @@ func (p *Poller) fetchOnce(ctx context.Context, path string, since *time.Time, i
 	status int,
 	err error,
 ) {
-	u, err := url.Parse(p.BaseURL + path)
-	if err != nil {
-		return nil, 0, errors.New("invalid source URL")
-	}
-
-	if since != nil {
-		q := u.Query()
-		q.Set("since", since.UTC().Format(time.RFC3339Nano))
-		u.RawQuery = q.Encode()
-	}
-
 	callCtx, cancel := context.WithTimeout(ctx, p.Timeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, u.String(), nil)
+	req, err := p.sourceRequest(callCtx, path, since, id)
 	if err != nil {
-		return nil, 0, errors.New("invalid request")
+		return nil, 0, err
 	}
-
-	req.Header.Set("X-Correlation-ID", id)
-
-	pollerSources[p.Source].authorize(req, p.Credential)
 
 	start := time.Now()
 
@@ -145,7 +131,41 @@ func (p *Poller) fetchOnce(ctx context.Context, path string, since *time.Time, i
 		return nil, status, fmt.Errorf("source status %d", status)
 	}
 
-	err = decode.Array(resp.Body, decode.Limits{BodyBytes: min(cmp.Or(p.MaxSourceBytes, defaultMaxSourceBytes), defaultMaxSourceBytes), Records: cmp.Or(p.MaxRecords, defaultMaxSourceRecords)}, func(record decode.Record) error {
+	records, err = p.decodeRecords(ctx, path, id, resp.Body)
+
+	return records, status, err
+}
+
+func (p *Poller) sourceRequest(ctx context.Context, path string, since *time.Time, id string) (*http.Request, error) {
+	u, err := url.Parse(p.BaseURL + path)
+	if err != nil {
+		return nil, errors.New("invalid source URL")
+	}
+
+	if since != nil {
+		q := u.Query()
+		q.Set("since", since.UTC().Format(time.RFC3339Nano))
+		u.RawQuery = q.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, errors.New("invalid request")
+	}
+
+	req.Header.Set("X-Correlation-ID", id)
+	pollerSources[p.Source].authorize(req, p.Credential)
+
+	return req, nil
+}
+
+// decodeRecords streams the body and parks each record or body that breaks the boundary rules.
+func (p *Poller) decodeRecords(ctx context.Context, path, id string, body io.Reader) ([]sourceRecord, error) {
+	var records []sourceRecord
+
+	limits := decode.Limits{BodyBytes: min(cmp.Or(p.MaxSourceBytes, defaultMaxSourceBytes), defaultMaxSourceBytes), Records: cmp.Or(p.MaxRecords, defaultMaxSourceRecords)}
+
+	err := decode.Array(body, limits, func(record decode.Record) error {
 		if record.Code != "" {
 			p.reject(id, "", record.Code)
 			return p.park(ctx, path, id, record.Raw, record.Code, "record failed boundary validation", nil)
@@ -155,18 +175,20 @@ func (p *Poller) fetchOnce(ctx context.Context, path string, since *time.Time, i
 
 		return nil
 	})
-	if err != nil {
-		var issue *decode.BodyError
-		if !errors.As(err, &issue) {
-			return nil, status, err
-		}
-
-		if err = p.park(ctx, path, id, issue.Raw, issue.Code, "source body failed boundary validation", issue); err != nil {
-			return nil, status, err
-		}
+	if err == nil {
+		return records, nil
 	}
 
-	return records, status, nil
+	var issue *decode.BodyError
+	if !errors.As(err, &issue) {
+		return nil, err
+	}
+
+	if err = p.park(ctx, path, id, issue.Raw, issue.Code, "source body failed boundary validation", issue); err != nil {
+		return nil, err
+	}
+
+	return records, nil
 }
 
 func (p *Poller) reject(id, ref, reason string) {
