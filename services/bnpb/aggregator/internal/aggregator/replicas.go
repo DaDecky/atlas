@@ -99,31 +99,7 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 }
 
 func (c *Cluster) markFailedCopy(ctx context.Context, shard, source string, epoch int64, holder placement.Copy) error {
-	for range 5 {
-		t, _, err := c.Placement.Load(ctx)
-		if err != nil {
-			return err
-		}
-
-		found := false
-
-		for _, current := range t.Shards[shard] {
-			if current.Node == holder.Node && current.StoreID == holder.StoreID {
-				found = true
-			}
-		}
-
-		if !found {
-			return placement.ErrConflict
-		}
-
-		err = c.MarkBehind(ctx, BehindRequest{Source: source, Epoch: epoch, Shard: shard, Copy: holder.Node, Generation: t.Generation})
-		if !errors.Is(err, placement.ErrConflict) {
-			return err
-		}
-	}
-
-	return placement.ErrConflict
+	return c.MarkBehind(ctx, BehindRequest{Source: source, Epoch: epoch, Shard: shard, Copy: holder.Node, StoreID: holder.StoreID})
 }
 
 // Results belong to individual attempts; a canceled loser never mutates the

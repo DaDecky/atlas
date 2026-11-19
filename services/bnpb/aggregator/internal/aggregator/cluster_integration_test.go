@@ -94,6 +94,7 @@ func dataCluster(t *testing.T) *Cluster {
 
 	limits := DefaultClusterLimits()
 	limits.ShardDeadline = time.Second
+
 	c := &Cluster{Nodes: nodes, Placement: repo, Limits: limits}
 	for _, source := range []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"} {
 		if err := c.Seal(ctx, source, 1); err != nil {
@@ -172,8 +173,7 @@ func TestDataIntegrationDualWriteWipeRefillAndNextLoss(t *testing.T) {
 	for shard, copies := range table.Shards {
 		for _, copy := range copies {
 			if copy.Node == "b" {
-				current, _, _ := c.Placement.Load(ctx)
-				if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: "b", Generation: current.Generation}); err != nil {
+				if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: "b", StoreID: copy.StoreID}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -251,7 +251,7 @@ func TestDataIntegrationLiveRefillAndAudit(t *testing.T) {
 	table, _, _ := c.Placement.Load(ctx)
 
 	target := table.Shards[shard][1].Node
-	if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: target, Generation: table.Generation}); err != nil {
+	if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: target, StoreID: table.Shards[shard][1].StoreID}); err != nil {
 		t.Fatal(err)
 	}
 

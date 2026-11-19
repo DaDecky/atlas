@@ -62,7 +62,15 @@ func markCopy(t *testing.T, c *Cluster, shard, node string) {
 		t.Fatal(err)
 	}
 
-	if err = c.MarkBehind(context.Background(), BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: node, Generation: table.Generation}); err != nil {
+	storeID := ""
+
+	for _, holder := range table.Shards[shard] {
+		if holder.Node == node {
+			storeID = holder.StoreID
+		}
+	}
+
+	if err = c.MarkBehind(context.Background(), BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: node, StoreID: storeID}); err != nil {
 		t.Fatal(err)
 	}
 }

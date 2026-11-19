@@ -45,15 +45,15 @@ type StreamState struct {
 	Payload json.RawMessage
 }
 
-// BehindRequest identifies a placement compare-and-swap authorized by the
-// source's current writer. Replica code must reject an outdated generation or
-// epoch before permitting a single-copy write. B1 has no replica placement.
+// BehindRequest identifies a placement change authorized by the source's current writer.
+// Replica code must reject an outdated epoch or copy incarnation before permitting a
+// single-copy write. B1 has no replica placement.
 type BehindRequest struct {
-	Source     string
-	Epoch      int64
-	Shard      string
-	Copy       string
-	Generation int64
+	Source  string
+	Epoch   int64
+	Shard   string
+	Copy    string
+	StoreID string
 }
 
 var (

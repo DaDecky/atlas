@@ -247,7 +247,7 @@ func TestIntegrationShardStoreRestart(t *testing.T) {
 	}
 
 	if err := restarted.MarkBehind(ctx, BehindRequest{
-		Source: batch.Source, Epoch: 2, Shard: "shard-1", Copy: "b", Generation: 1,
+		Source: batch.Source, Epoch: 2, Shard: "shard-1", Copy: "b", StoreID: "b",
 	}); !errors.Is(err, ErrSingleInstance) {
 		t.Fatal("single instance claimed placement changed", err)
 	}

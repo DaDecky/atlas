@@ -20,37 +20,31 @@ import (
 // copy cannot overwrite a newer live write. A failed live write changes the
 // placement version, so the final CAS cannot promote that failed copy.
 func (c *Cluster) Refill(ctx context.Context, shard, target string) error {
-	t, v, err := c.Placement.Load(ctx)
+	var donor placement.Copy
+
+	err := c.updatePlacement(ctx, func(t *placement.Table) (bool, error) {
+		found := false
+		donor = placement.Copy{}
+
+		for _, holder := range t.Shards[shard] {
+			if holder.Node == target {
+				found = true
+			} else if holder.State == placement.Serving {
+				donor = holder
+			}
+		}
+
+		if !found || donor.Node == "" || c.Nodes[target] == nil || c.Nodes[donor.Node] == nil {
+			return false, errors.New("refill needs a serving source and configured target")
+		}
+
+		return true, t.Transition(shard, target, placement.Refilling)
+	})
 	if err != nil {
 		return err
 	}
 
-	var donor placement.Copy
-
-	found := false
-
-	for _, holder := range t.Shards[shard] {
-		if holder.Node == target {
-			found = true
-		} else if holder.State == placement.Serving {
-			donor = holder
-		}
-	}
-
-	if !found || donor.Node == "" || c.Nodes[target] == nil || c.Nodes[donor.Node] == nil {
-		return errors.New("refill needs a serving source and configured target")
-	}
-
-	if err = t.Transition(shard, target, placement.Refilling); err != nil {
-		return err
-	}
-
-	t.Generation++
-	if err = c.Placement.CompareAndSwap(ctx, v, t); err != nil {
-		return err
-	}
-
-	t, v, err = c.Placement.Load(ctx)
+	t, v, err := c.Placement.Load(ctx)
 	if err != nil {
 		return err
 	}
@@ -100,9 +94,7 @@ func (c *Cluster) Refill(ctx context.Context, shard, target string) error {
 		return err
 	}
 
-	t.Generation++
-
-	return c.Placement.CompareAndSwap(ctx, v, t)
+	return c.swapPlacement(ctx, v, t)
 }
 
 func copyShard(ctx context.Context, from, to *Store) error {
@@ -609,8 +601,7 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 		t.Nodes = append(t.Nodes, newNode)
 	}
 
-	t.Generation++
-	if err = c.Placement.CompareAndSwap(ctx, v, t); err != nil {
+	if err = c.swapPlacement(ctx, v, t); err != nil {
 		return err
 	}
 

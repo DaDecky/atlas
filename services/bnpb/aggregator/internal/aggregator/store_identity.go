@@ -2,7 +2,6 @@ package aggregator
 
 import (
 	"context"
-	"errors"
 
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
@@ -44,12 +43,7 @@ func (c *Cluster) detectStore(ctx context.Context, name string) (bool, error) {
 		return false, err
 	}
 
-	for range 5 {
-		t, version, err := c.Placement.Load(call)
-		if err != nil {
-			return false, err
-		}
-
+	err = c.updatePlacement(call, func(t *placement.Table) (bool, error) {
 		changed := false
 
 		for shard, copies := range t.Shards {
@@ -59,7 +53,7 @@ func (c *Cluster) detectStore(ctx context.Context, name string) (bool, error) {
 				}
 
 				if count < placement.Shards || (holder.StoreID != "" && holder.StoreID != id) {
-					if err = t.Transition(shard, name, placement.Behind); err != nil {
+					if err := t.Transition(shard, name, placement.Behind); err != nil {
 						return false, err
 					}
 
@@ -73,17 +67,8 @@ func (c *Cluster) detectStore(ctx context.Context, name string) (bool, error) {
 			}
 		}
 
-		if !changed {
-			return count < placement.Shards, nil
-		}
+		return changed, nil
+	})
 
-		t.Generation++
-
-		err = c.Placement.CompareAndSwap(call, version, t)
-		if !errors.Is(err, placement.ErrConflict) {
-			return count < placement.Shards, err
-		}
-	}
-
-	return false, placement.ErrConflict
+	return count < placement.Shards, err
 }

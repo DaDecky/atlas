@@ -36,6 +36,9 @@ type ClusterLimits struct {
 	IngestPool, QueryPool     int32
 }
 
+// Five attempts follow the default of the Kubernetes client retry on conflict.
+const placementAttempts = 5
+
 var _ ShardStore = (*Cluster)(nil)
 
 func OpenDataNode(ctx context.Context, name, url string, limits ClusterLimits) (*DataNode, error) {
@@ -169,7 +172,7 @@ func (c *Cluster) AcquireWriterEpoch(ctx context.Context, source string) (int64,
 }
 
 func (c *Cluster) seal(ctx context.Context, source string, epoch int64, strict bool) error {
-	table, v, err := c.Placement.Load(ctx)
+	table, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return err
 	}
@@ -200,63 +203,91 @@ func (c *Cluster) seal(ctx context.Context, source string, epoch int64, strict b
 	if count < len(table.Nodes)/2+1 {
 		return errors.New("seal majority unavailable")
 	}
-	// An unsealed holder must not serve a stale writer's data after takeover.
-	for shard, copies := range table.Shards {
-		for _, holder := range copies {
-			if sealed[holder.Node] {
-				continue
-			}
 
-			if err = table.Transition(shard, holder.Node, placement.Behind); err != nil {
-				return err
+	return c.updatePlacement(ctx, func(t *placement.Table) (bool, error) {
+		if epoch < t.WriterEpochs[source] || strict && epoch == t.WriterEpochs[source] {
+			return false, ErrStaleEpoch
+		}
+		// An unsealed holder must not serve a stale writer's data after takeover.
+		for shard, copies := range t.Shards {
+			for _, holder := range copies {
+				if sealed[holder.Node] {
+					continue
+				}
+
+				if err := t.Transition(shard, holder.Node, placement.Behind); err != nil {
+					return false, err
+				}
 			}
 		}
-	}
 
-	table.WriterEpochs[source] = epoch
-	table.Generation++
+		t.WriterEpochs[source] = epoch
 
-	return c.Placement.CompareAndSwap(ctx, v, table)
+		return true, nil
+	})
 }
 
+// MarkBehind fences one copy out of reads. Only the writer epoch and the incarnation of that
+// copy must still hold, so a change to another shard does not refuse the mark.
 func (c *Cluster) MarkBehind(ctx context.Context, r BehindRequest) error {
-	table, v, err := c.Placement.Load(ctx)
-	if err != nil {
-		return err
-	}
+	return c.updatePlacement(ctx, func(t *placement.Table) (bool, error) {
+		if t.WriterEpochs[r.Source] != r.Epoch {
+			return false, ErrStaleEpoch
+		}
 
-	if table.Generation != r.Generation {
-		return placement.ErrConflict
-	}
+		found, serving := false, false
 
-	if table.WriterEpochs[r.Source] != r.Epoch {
-		return ErrStaleEpoch
-	}
+		for _, holder := range t.Shards[r.Shard] {
+			if holder.Node == r.Copy {
+				found = holder.StoreID == r.StoreID
+			} else if holder.State == placement.Serving {
+				serving = true
+			}
+		}
 
-	copies, ok := table.Shards[r.Shard]
-	if !ok {
-		return errors.New("unknown shard")
-	}
+		if !found {
+			return false, fmt.Errorf("copy %s of %s was replaced: %w", r.Copy, r.Shard, placement.ErrConflict)
+		}
 
-	serving := false
+		if !serving {
+			return false, errors.New("mark behind requires another serving copy")
+		}
 
-	for _, holder := range copies {
-		if holder.Node != r.Copy && holder.State == placement.Serving {
-			serving = true
+		return true, t.Transition(r.Shard, r.Copy, placement.Behind)
+	})
+}
+
+// updatePlacement applies change to the newest table and swaps it in, and retries when another
+// writer swapped first. change sees a fresh table on every attempt, so it rechecks its own rules.
+func (c *Cluster) updatePlacement(ctx context.Context, change func(*placement.Table) (bool, error)) error {
+	for range placementAttempts {
+		t, version, err := c.Placement.Load(ctx)
+		if err != nil {
+			return err
+		}
+
+		changed, err := change(&t)
+		if err != nil || !changed {
+			return err
+		}
+
+		t.Generation++
+
+		err = c.Placement.CompareAndSwap(ctx, version, t)
+		if !errors.Is(err, placement.ErrConflict) {
+			return err
 		}
 	}
 
-	if !serving {
-		return errors.New("mark behind requires another serving copy")
-	}
+	return placement.ErrConflict
+}
 
-	if err = table.Transition(r.Shard, r.Copy, placement.Behind); err != nil {
-		return err
-	}
+// swapPlacement swaps in t only if the table is still at version. A step whose preconditions
+// came from an earlier read uses it, since a retry would apply them to a table they no longer fit.
+func (c *Cluster) swapPlacement(ctx context.Context, version string, t placement.Table) error {
+	t.Generation++
 
-	table.Generation++
-
-	return c.Placement.CompareAndSwap(ctx, v, table)
+	return c.Placement.CompareAndSwap(ctx, version, t)
 }
 
 func (c *Cluster) Upsert(ctx context.Context, b WriteBatch) ([]HazardEvent, error) {

@@ -26,12 +26,12 @@ func TestDataIntegrationMarkBehindKeepsLastServingCopy(t *testing.T) {
 
 	first, last := current.Shards[shard][0], current.Shards[shard][1]
 
-	request := BehindRequest{Source: source, Epoch: current.WriterEpochs[source], Shard: shard, Copy: first.Node, Generation: current.Generation}
+	request := BehindRequest{Source: source, Epoch: current.WriterEpochs[source], Shard: shard, Copy: first.Node, StoreID: first.StoreID}
 	if err = cluster.MarkBehind(ctx, request); err != nil {
 		t.Fatal(err)
 	}
 
-	request.Copy, request.Generation = last.Node, current.Generation+1
+	request.Copy, request.StoreID = last.Node, last.StoreID
 	if err = cluster.MarkBehind(ctx, request); err == nil {
 		t.Fatal("last serving copy was marked behind")
 	}
