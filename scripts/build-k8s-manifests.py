@@ -83,8 +83,8 @@ def workload(name, role, port, sizes, *, stateful=False, health="/health", owner
 def main():
     objects = []
     for name, owner in [("auth-db", "auth"), ("bmkg-db", "bmkg"), ("pvmbg-db", "pvmbg")]:
-        objects += [service(name, 5432, True), workload(name, "store", 5432, ("512Mi", "1Gi"), stateful=True, owner=owner, volume="/var/lib/postgresql", image="postgres:18.3-alpine")]
-    objects += [service("rabbitmq", 5672, True), workload("rabbitmq", "broker", 5672, ("512Mi", "1Gi"), stateful=True, volume="/var/lib/rabbitmq", image="rabbitmq:4.2.5-alpine")]
+        objects += [service(name, 5432, True), workload(name, "store", 5432, ("512Mi", "1Gi"), stateful=True, owner=owner, volume="/var/lib/postgresql", image="postgres:18.3-alpine@sha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7")]
+    objects += [service("rabbitmq", 5672, True), workload("rabbitmq", "broker", 5672, ("512Mi", "1Gi"), stateful=True, volume="/var/lib/rabbitmq", image="rabbitmq:4.2.5-alpine@sha256:d4a3806070111cc69130a6542aa4049b612789852ef11fc3862abc94631b2572")]
     for name, port in [("bmkg", 8081), ("pvmbg", 8082)]:
         objects += [service(name, port), workload(name, "mock", port, ("64Mi", "128Mi"))]
     objects += [service("auth", 8084), workload("auth", "api", 8084, ("128Mi", "256Mi"))]
