@@ -87,8 +87,8 @@ def main():
     objects += [service("rabbitmq", 5672, True), workload("rabbitmq", "broker", 5672, ("512Mi", "1Gi"), stateful=True, volume="/var/lib/rabbitmq", image="rabbitmq:4.2.5-alpine")]
     for name, port in [("bmkg", 8081), ("pvmbg", 8082)]:
         objects += [service(name, port), workload(name, "mock", port, ("64Mi", "128Mi"))]
-    objects += [service("auth", 8084), workload("auth", "auth", 8084, ("128Mi", "256Mi"))]
-    objects += [service("client-api", 8080), workload("client-api", "client-api", 8080, ("128Mi", "256Mi"))]
+    objects += [service("auth", 8084), workload("auth", "api", 8084, ("128Mi", "256Mi"))]
+    objects += [service("client-api", 8080), workload("client-api", "api", 8080, ("128Mi", "256Mi"))]
     objects += [service("aggregator", 8083), workload("aggregator", "aggregator", 8083, ("256Mi", "512Mi"), env={"SOURCE_SCHEMA_POLICY_FILE": "/etc/atlas/schema/policy.json"})]
     for name, port in [("consumer-a", 8091), ("consumer-b", 8092)]:
         objects += [workload(name, "consumer", port, ("128Mi", "256Mi"), volume="/data"), resource("PersistentVolumeClaim", name + "-data", spec={"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}})]
@@ -119,6 +119,7 @@ def main():
     dev["patches"].append(host_patch)
     write("overlays/dev/kustomization.yaml", dev)
     demo = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["../../base"], "replicas": [{"name": "aggregator", "count": 3}], "patches": [pin, host_patch, {"target": {"kind": "StatefulSet", "name": "auth-db|bmkg-db|pvmbg-db|rabbitmq"}, "patch": pin["patch"]}, {"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "M2_READ_ONLY", "value": "1"}}, {"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "M2_DATA_CONFIG", "value": "/etc/atlas/data/config.json"}}, {"op": "add", "path": "/spec/template/spec/volumes/-", "value": {"name": "data-config", "secret": {"secretName": "canonical-data-config"}}}, {"op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-", "value": {"name": "data-config", "mountPath": "/etc/atlas/data", "readOnly": True}}])}]}
+    demo["replicas"] += [{"name": name, "count": 2} for name in ["auth", "client-api"]]
     write("overlays/demo/kustomization.yaml", demo)
     print("Generated base and dev/demo overlays; vendor manifests preserved")
 

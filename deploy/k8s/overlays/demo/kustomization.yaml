@@ -8,6 +8,14 @@
     {
       "name": "aggregator",
       "count": 3
+    },
+    {
+      "name": "auth",
+      "count": 2
+    },
+    {
+      "name": "client-api",
+      "count": 2
     }
   ],
   "patches": [
