@@ -169,28 +169,28 @@ func ConfigFromEnv() (Config, error) {
 	return c, nil
 }
 
-func envDuration(key string, fallback, min, max time.Duration) (time.Duration, error) {
+func envDuration(key string, fallback, lowest, highest time.Duration) (time.Duration, error) {
 	raw := os.Getenv(key)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	d, err := time.ParseDuration(raw)
-	if err != nil || d < min || d > max {
+	if err != nil || d < lowest || d > highest {
 		return 0, fmt.Errorf("invalid %s", key)
 	}
 
 	return d, nil
 }
 
-func envInt(key string, fallback, min, max int) (int, error) {
+func envInt(key string, fallback, lowest, highest int) (int, error) {
 	raw := os.Getenv(key)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < min || n > max {
+	if err != nil || n < lowest || n > highest {
 		return 0, fmt.Errorf("invalid %s", key)
 	}
 

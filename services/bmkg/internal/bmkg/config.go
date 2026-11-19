@@ -63,23 +63,23 @@ func ConfigFromEnv() (Config, error) {
 	}
 
 	var err error
-	if c.DelayFloor, err = duration("RESPONSE_DELAY_FLOOR", MinDelay, time.Millisecond, time.Minute); err != nil {
+	if c.DelayFloor, err = envDuration("RESPONSE_DELAY_FLOOR", MinDelay, time.Millisecond, time.Minute); err != nil {
 		return c, err
 	}
 
-	if c.DelayCeiling, err = duration("RESPONSE_DELAY_CEILING", MaxDelay, c.DelayFloor, time.Minute); err != nil {
+	if c.DelayCeiling, err = envDuration("RESPONSE_DELAY_CEILING", MaxDelay, c.DelayFloor, time.Minute); err != nil {
 		return c, err
 	}
 
-	if c.EventIntervalCeiling, err = duration("EVENT_INTERVAL_CEILING", MaxEventInterval, time.Second, time.Hour); err != nil {
+	if c.EventIntervalCeiling, err = envDuration("EVENT_INTERVAL_CEILING", MaxEventInterval, time.Second, time.Hour); err != nil {
 		return c, err
 	}
 
-	if c.Delay, err = duration("RESPONSE_DELAY", min(max(defaultDelay, c.DelayFloor), c.DelayCeiling), c.DelayFloor, c.DelayCeiling); err != nil {
+	if c.Delay, err = envDuration("RESPONSE_DELAY", min(max(defaultDelay, c.DelayFloor), c.DelayCeiling), c.DelayFloor, c.DelayCeiling); err != nil {
 		return c, err
 	}
 
-	c.EventInterval, err = duration("EVENT_INTERVAL", c.EventIntervalCeiling, time.Second, c.EventIntervalCeiling)
+	c.EventInterval, err = envDuration("EVENT_INTERVAL", c.EventIntervalCeiling, time.Second, c.EventIntervalCeiling)
 	if err != nil {
 		return c, err
 	}
@@ -99,7 +99,7 @@ func ConfigFromEnv() (Config, error) {
 		{"STORE_TIMEOUT", defaultStoreTimeout, 100 * time.Millisecond, time.Minute, &c.StoreTimeout},
 	}
 	for _, d := range durations {
-		if *d.dest, err = duration(d.key, d.fallback, d.min, d.max); err != nil {
+		if *d.dest, err = envDuration(d.key, d.fallback, d.min, d.max); err != nil {
 			return c, err
 		}
 	}
@@ -114,7 +114,7 @@ func ConfigFromEnv() (Config, error) {
 		{"MIN_SEED_RECORDS", MinSeedRecords, 1, 100000, &c.MinSeedRecords},
 	}
 	for _, d := range ints {
-		if *d.dest, err = integer(d.key, d.fallback, d.min, d.max); err != nil {
+		if *d.dest, err = envInt(d.key, d.fallback, d.min, d.max); err != nil {
 			return c, err
 		}
 	}
@@ -126,15 +126,15 @@ func ConfigFromEnv() (Config, error) {
 	return c, nil
 }
 
-func integer(key string, fallback, min, max int) (int, error) {
+func envInt(key string, fallback, lowest, highest int) (int, error) {
 	raw := os.Getenv(key)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < min || n > max {
-		return 0, fmt.Errorf("%s must be an integer between %d and %d", key, min, max)
+	if err != nil || n < lowest || n > highest {
+		return 0, fmt.Errorf("%s must be an integer between %d and %d", key, lowest, highest)
 	}
 
 	return n, nil
@@ -154,15 +154,15 @@ func seedFromEnv(fallback uint64) (uint64, error) {
 	return n, nil
 }
 
-func duration(key string, fallback, min, max time.Duration) (time.Duration, error) {
+func envDuration(key string, fallback, lowest, highest time.Duration) (time.Duration, error) {
 	raw := os.Getenv(key)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	d, err := time.ParseDuration(raw)
-	if err != nil || d < min || d > max {
-		return 0, fmt.Errorf("%s must be a duration between %s and %s", key, min, max)
+	if err != nil || d < lowest || d > highest {
+		return 0, fmt.Errorf("%s must be a duration between %s and %s", key, lowest, highest)
 	}
 
 	return d, nil
