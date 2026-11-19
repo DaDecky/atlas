@@ -77,11 +77,11 @@ func run(log *slog.Logger) error {
 	}
 
 	api := &aggregator.API{
-		Store:    store,
-		Token:    c.InternalToken,
-		Timeout:  c.QueryTimeout,
-		Capacity: make(chan struct{}, c.QueryCapacity),
-		Log:      log,
+		Store:     store,
+		Token:     c.InternalToken,
+		Timeout:   c.QueryTimeout,
+		Admission: aggregator.NewAdmission(c.QueryCapacity, c.FieldReservedPercent),
+		Log:       log,
 	}
 	server := &http.Server{
 		Addr:              c.Address,

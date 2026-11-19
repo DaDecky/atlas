@@ -19,12 +19,12 @@ import (
 )
 
 type API struct {
-	Config       Config
-	Client       *http.Client
-	Log          *slog.Logger
-	Reports      ReportPublisher
-	capacity     chan struct{}
-	capacityOnce sync.Once
+	Config        Config
+	Client        *http.Client
+	Log           *slog.Logger
+	Reports       ReportPublisher
+	admission     *admission
+	admissionOnce sync.Once
 }
 
 type validateRequest struct {
@@ -392,27 +392,15 @@ func retryAfter(raw string, max time.Duration) string {
 }
 
 func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
-	select {
-	case a.capacity <- struct{}{}:
-		defer func() { <-a.capacity }()
-	default:
-		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusTooManyRequests, "capacity_exceeded")
-
-		return
-	}
-
-	jwt, ok := bearerValue(r.Header.Get("Authorization"))
+	claims, ok := a.verifyRequest(w, r)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	claims, err := verifyAccessToken(jwt, a.Config.PublicKey, a.Config.Issuer, a.Config.Audience, time.Now())
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid_token")
+	if !a.admit(w, claims) {
 		return
 	}
+	defer a.admission.release()
 
 	status, code := a.validateCurrent(r.Context(), claims, r.Header.Get("X-Correlation-ID"))
 	if status != http.StatusOK {
@@ -437,7 +425,8 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := a.outbound(r.Context(), http.MethodGet, target, map[string]string{
-		"Authorization": "Bearer " + a.Config.AggregatorToken,
+		"Authorization":   "Bearer " + a.Config.AggregatorToken,
+		"X-Request-Class": requestClass(claims),
 	}, nil, r.Header.Get("X-Correlation-ID"), "aggregator")
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "aggregator_unavailable")
@@ -483,9 +472,9 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// The capacity is shared across Handler calls, so tests that build several handlers see one limit.
+// The admission is shared across Handler calls, so tests that build several handlers see one limit.
 func (a *API) Handler() http.Handler {
-	a.capacityOnce.Do(func() { a.capacity = make(chan struct{}, a.Config.RequestCapacity) })
+	a.admissionOnce.Do(func() { a.admission = newAdmission(a.Config.RequestCapacity, a.Config.FieldReservedPercent) })
 
 	mux := chi.NewRouter()
 	mux.Use(a.logRequest)

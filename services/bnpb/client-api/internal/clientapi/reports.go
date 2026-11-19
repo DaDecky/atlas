@@ -62,7 +62,8 @@ func decodeReport(raw []byte) (FieldReport, error) {
 	return report, nil
 }
 
-func (a *API) authorize(w http.ResponseWriter, r *http.Request, scope string) (AccessClaims, bool) {
+// verifyRequest checks the bearer token locally, so it costs no call to Auth.
+func (a *API) verifyRequest(w http.ResponseWriter, r *http.Request) (AccessClaims, bool) {
 	token, ok := bearerValue(r.Header.Get("Authorization"))
 	if !ok {
 		writeError(w, 401, "unauthorized")
@@ -75,32 +76,45 @@ func (a *API) authorize(w http.ResponseWriter, r *http.Request, scope string) (A
 		return claims, false
 	}
 
+	return claims, true
+}
+
+// permit checks the scope, then asks Auth whether the session is still current.
+func (a *API) permit(w http.ResponseWriter, r *http.Request, claims AccessClaims, scope string) bool {
 	if !hasScope(claims.Scope, scope) {
 		writeError(w, 403, "insufficient_scope")
-		return claims, false
+		return false
 	}
 
 	if status, code := a.validateCurrent(r.Context(), claims, r.Header.Get("X-Correlation-ID")); status != 200 {
 		writeError(w, status, code)
+		return false
+	}
+
+	return true
+}
+
+func (a *API) authorize(w http.ResponseWriter, r *http.Request, scope string) (AccessClaims, bool) {
+	claims, ok := a.verifyRequest(w, r)
+	if !ok {
 		return claims, false
 	}
 
-	return claims, true
+	return claims, a.permit(w, r, claims, scope)
 }
 
 func (a *API) fieldReports(w http.ResponseWriter, r *http.Request) {
-	select {
-	case a.capacity <- struct{}{}:
-		defer func() { <-a.capacity }()
-	default:
-		w.Header().Set("Retry-After", "1")
-		writeError(w, 429, "capacity_exceeded")
-
+	claims, ok := a.verifyRequest(w, r)
+	if !ok {
 		return
 	}
 
-	claims, ok := a.authorize(w, r, "reports:write")
-	if !ok {
+	if !a.admit(w, claims) {
+		return
+	}
+	defer a.admission.release()
+
+	if !a.permit(w, r, claims, "reports:write") {
 		return
 	}
 

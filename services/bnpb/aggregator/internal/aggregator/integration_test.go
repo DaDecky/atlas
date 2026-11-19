@@ -302,7 +302,7 @@ func TestIntegrationLivePollingMappingFreshnessAndReads(t *testing.T) {
 		t.Fatal("late warning or identity failed", quakes, err)
 	}
 
-	api := (&API{Store: s, Token: "test-internal", Timeout: time.Second, Capacity: make(chan struct{}, 64), Log: testLog()}).Handler()
+	api := (&API{Store: s, Token: "test-internal", Timeout: time.Second, Admission: NewAdmission(64, 0), Log: testLog()}).Handler()
 
 	callsBefore := bmkgCalls.Load()
 	if request(api, "/internal/hazards?source=BMKG", "test-internal").Code != 200 || bmkgCalls.Load() != callsBefore {

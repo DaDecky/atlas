@@ -12,7 +12,7 @@ import (
 type Config struct {
 	DatabaseURL, RabbitMQURL, BMKGURL, PVMBGURL, BMKGKey, PVMBGToken, InternalToken, Address string
 	PollInterval, SourceTimeout, Backoff, QueryTimeout, PublishTimeout                       time.Duration
-	SourceRetries, PublishRetries, QueryCapacity, PublishCapacity                            int
+	SourceRetries, PublishRetries, QueryCapacity, PublishCapacity, FieldReservedPercent      int
 	IngestPool, QueryPool                                                                    int32
 
 	HTTPReadHeaderTimeout, HTTPReadTimeout, HTTPIdleTimeout, StartupTimeout, ShutdownTimeout time.Duration
@@ -22,18 +22,20 @@ type Config struct {
 }
 
 const (
-	defaultAddress         = ":8083"
-	defaultPollInterval    = 3 * time.Second
-	defaultSourceTimeout   = 4 * time.Second
-	defaultRetryBackoff    = 200 * time.Millisecond
-	defaultQueryTimeout    = 2 * time.Second
-	defaultPublishTimeout  = 3 * time.Second
-	defaultSourceRetries   = 2
-	defaultPublishRetries  = 2
-	defaultQueryCapacity   = 64
-	defaultPublishCapacity = 256
-	defaultIngestPool      = 2
-	defaultQueryPool       = 8
+	defaultAddress        = ":8083"
+	defaultPollInterval   = 3 * time.Second
+	defaultSourceTimeout  = 4 * time.Second
+	defaultRetryBackoff   = 200 * time.Millisecond
+	defaultQueryTimeout   = 2 * time.Second
+	defaultPublishTimeout = 3 * time.Second
+	defaultSourceRetries  = 2
+	defaultPublishRetries = 2
+	defaultQueryCapacity  = 64
+	// A quarter of the query slots stay free for Field Team when Media fills the rest.
+	defaultFieldReservedPercent = 25
+	defaultPublishCapacity      = 256
+	defaultIngestPool           = 2
+	defaultQueryPool            = 8
 
 	defaultHTTPReadHeaderTimeout = 3 * time.Second
 	defaultHTTPReadTimeout       = 5 * time.Second
@@ -131,6 +133,7 @@ func ConfigFromEnv() (Config, error) {
 		{"SOURCE_RETRIES", defaultSourceRetries, 0, 5, &c.SourceRetries},
 		{"PUBLISH_RETRIES", defaultPublishRetries, 0, 5, &c.PublishRetries},
 		{"QUERY_CAPACITY", defaultQueryCapacity, 1, 1024, &c.QueryCapacity},
+		{"FIELD_TEAM_RESERVED_PERCENT", defaultFieldReservedPercent, 0, 90, &c.FieldReservedPercent},
 		{"PUBLISH_CAPACITY", defaultPublishCapacity, 1, 10000, &c.PublishCapacity},
 		{"INGEST_POOL_SIZE", defaultIngestPool, 1, 64, &ingestPool},
 		{"QUERY_POOL_SIZE", defaultQueryPool, 1, 64, &queryPool},

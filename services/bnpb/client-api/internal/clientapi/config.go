@@ -18,7 +18,7 @@ type Config struct {
 	Issuer, Audience                                                string
 	PublicKey                                                       ed25519.PublicKey
 	OutboundTimeout                                                 time.Duration
-	RequestCapacity                                                 int
+	RequestCapacity, FieldReservedPercent                           int
 	RabbitMQURL                                                     string
 
 	HTTPReadHeaderTimeout, HTTPReadTimeout, HTTPIdleTimeout, ShutdownTimeout, MaxRetryAfter time.Duration
@@ -29,6 +29,8 @@ const (
 	defaultAddress         = ":8080"
 	defaultOutboundTimeout = 3 * time.Second
 	defaultRequestCapacity = 128
+	// A quarter of the slots stay free for Field Team when Media fills the rest.
+	defaultFieldReservedPercent = 25
 
 	defaultHTTPReadHeaderTimeout = 3 * time.Second
 	defaultHTTPReadTimeout       = 5 * time.Second
@@ -131,6 +133,14 @@ func ConfigFromEnv() (Config, error) {
 		c.RequestCapacity, err = strconv.Atoi(raw)
 		if err != nil || c.RequestCapacity < 1 || c.RequestCapacity > 10000 {
 			return c, errors.New("invalid CLIENT_API_REQUEST_CAPACITY")
+		}
+	}
+
+	c.FieldReservedPercent = defaultFieldReservedPercent
+	if raw := os.Getenv("FIELD_TEAM_RESERVED_PERCENT"); raw != "" {
+		c.FieldReservedPercent, err = strconv.Atoi(raw)
+		if err != nil || c.FieldReservedPercent < 0 || c.FieldReservedPercent > 90 {
+			return c, errors.New("invalid FIELD_TEAM_RESERVED_PERCENT")
 		}
 	}
 
