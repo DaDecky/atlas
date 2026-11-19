@@ -22,7 +22,7 @@
     {
       "target": {
         "kind": "Deployment",
-        "name": "auth|client-api|bmkg|pvmbg|consumer-a|consumer-b"
+        "name": "auth|client-api|bmkg|pvmbg|consumer-a|consumer-b|notifier"
       },
       "patch": "[{\"op\": \"add\", \"path\": \"/spec/template/spec/nodeSelector\", \"value\": {\"kubernetes.io/hostname\": \"atlas-node-a\"}}]"
     },

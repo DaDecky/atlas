@@ -34,6 +34,7 @@ modules=(
   services/bnpb/auth
   consumers/consumer-a
   consumers/consumer-b
+  consumers/notifier
 )
 
 for module in "${modules[@]}"; do

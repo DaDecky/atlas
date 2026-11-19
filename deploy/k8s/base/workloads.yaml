@@ -1464,6 +1464,125 @@
       }
     },
     {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "notifier"
+      },
+      "spec": {
+        "replicas": 1,
+        "selector": {
+          "matchLabels": {
+            "app": "notifier"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "notifier",
+              "role": "consumer"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "name": "notifier",
+                "image": "atlas/notifier:m2-local",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "containerPort": 8093,
+                    "name": "tcp"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "memory": "256Mi"
+                  }
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8093
+                  },
+                  "periodSeconds": 3,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 2
+                },
+                "livenessProbe": {
+                  "tcpSocket": {
+                    "port": 8093
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 2,
+                  "initialDelaySeconds": 30
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8093
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 60
+                },
+                "envFrom": [
+                  {
+                    "secretRef": {
+                      "name": "notifier-credentials"
+                    }
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  }
+                ]
+              }
+            ],
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": false,
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "notifier-data"
+                }
+              }
+            ]
+          }
+        },
+        "strategy": {
+          "type": "Recreate"
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "notifier-data"
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "resources": {
+          "requests": {
+            "storage": "1Gi"
+          }
+        }
+      }
+    },
+    {
       "apiVersion": "v1",
       "kind": "Service",
       "metadata": {

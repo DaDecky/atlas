@@ -20,7 +20,7 @@ import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[1]
 NS = "sistem-informasi-kebencanaan-bnpb"
-SERVICES = {"bmkg": "services/bmkg", "pvmbg": "services/pvmbg", "auth": "services/bnpb/auth", "client-api": "services/bnpb/client-api", "aggregator": "services/bnpb/aggregator", "consumer-a": "consumers/consumer-a", "consumer-b": "consumers/consumer-b"}
+SERVICES = {"bmkg": "services/bmkg", "pvmbg": "services/pvmbg", "auth": "services/bnpb/auth", "client-api": "services/bnpb/client-api", "aggregator": "services/bnpb/aggregator", "consumer-a": "consumers/consumer-a", "consumer-b": "consumers/consumer-b", "notifier": "consumers/notifier"}
 
 
 def run(args, *, payload=None, private=False, cwd=ROOT):
@@ -186,7 +186,7 @@ def main():
     client.update(RABBITMQ_URL=broker)
     config("client-api-config", {"AUTH_BASE_URL": "http://auth:8084", "AGGREGATOR_BASE_URL": "http://aggregator:8083"})
     secret("client-api-credentials", client)
-    for name in ["consumer-a", "consumer-b"]:
+    for name in ["consumer-a", "consumer-b", "notifier"]:
         secret(name + "-credentials", {"AMQP_URL": broker})
     secret("pantai-token", {"token": values["PANTAI_AUTH_TOKEN"]})
     overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "namespace": NS, "resources": ["../deploy/k8s/overlays/" + args.overlay], "images": [{"name": "atlas/" + name, "newTag": args.tag} for name in SERVICES]}

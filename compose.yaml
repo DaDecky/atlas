@@ -232,6 +232,18 @@ services:
       rabbitmq: {condition: service_healthy}
     restart: unless-stopped
 
+  notifier:
+    build: ./consumers/notifier
+    environment:
+      AMQP_URL: amqp://atlas:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      CONSUMER_PREFETCH: ${CONSUMER_PREFETCH:-}
+      <<: [*http, *broker]
+    volumes: [notifier-data:/data]
+    networks: [events]
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    restart: unless-stopped
+
   consumer-c-demo:
     profiles: [consumer-c-demo]
     build: ./consumers/consumer-b
@@ -278,3 +290,4 @@ volumes:
   consumer-a-data:
   consumer-b-data:
   consumer-c-data:
+  notifier-data:

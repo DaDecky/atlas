@@ -90,7 +90,7 @@ def main():
     objects += [service("auth", 8084), workload("auth", "api", 8084, ("128Mi", "256Mi"))]
     objects += [service("client-api", 8080), workload("client-api", "api", 8080, ("128Mi", "256Mi"))]
     objects += [service("aggregator", 8083), workload("aggregator", "aggregator", 8083, ("256Mi", "512Mi"), env={"SOURCE_SCHEMA_POLICY_FILE": "/etc/atlas/schema/policy.json"})]
-    for name, port in [("consumer-a", 8091), ("consumer-b", 8092)]:
+    for name, port in [("consumer-a", 8091), ("consumer-b", 8092), ("notifier", 8093)]:
         objects += [workload(name, "consumer", port, ("128Mi", "256Mi"), volume="/data"), resource("PersistentVolumeClaim", name + "-data", spec={"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}})]
     objects += [service("sensor-pantai", 8080)]
     write("base/workloads.yaml", {"apiVersion": "v1", "kind": "List", "items": objects})
@@ -110,7 +110,7 @@ def main():
     write("base/kustomization.yaml", kustomization)
     write("vendor/sensor-pantai/kustomization.yaml", {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["manifest.yaml"]})
     write("overlays/dev/kustomization.yaml", {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["../../base"], "replicas": [{"name": "canonical-store", "count": 1}], "patches": [{"target": {"kind": "StatefulSet", "name": "canonical-store"}, "patch": json.dumps([{"op": "remove", "path": "/spec/volumeClaimTemplates/0/spec/storageClassName"}])}]})
-    pin = {"target": {"kind": "Deployment", "name": "auth|client-api|bmkg|pvmbg|consumer-a|consumer-b"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"kubernetes.io/hostname": "atlas-node-a"}}])}
+    pin = {"target": {"kind": "Deployment", "name": "auth|client-api|bmkg|pvmbg|consumer-a|consumer-b|notifier"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"kubernetes.io/hostname": "atlas-node-a"}}])}
     host_addresses = ["10.0.0." + str(host) for host in [40, 41, 42]] + ["10.42." + str(subnet) + "." + str(host) for subnet in [0, 2, 4] for host in [0, 1]]
     host_patch = {"target": {"kind": "NetworkPolicy", "name": "canonical-store-owner|auth-db-owner|bmkg-db-owner|pvmbg-db-owner"}, "patch": json.dumps([{"op": "add", "path": "/spec/ingress/0/from/-", "value": {"ipBlock": {"cidr": address + "/32"}}} for address in host_addresses])}
     # The existing Proxmox Tester Agent uses host networking in dev as well.
