@@ -35,7 +35,7 @@ func execData(t *testing.T, s *Store, sql string, args ...any) {
 	}
 }
 
-func copyState(t *testing.T, c *Cluster, shard, node string) string {
+func copyState(t *testing.T, c *Cluster, shard, node string) placement.State {
 	t.Helper()
 
 	table, _, err := c.Placement.Load(context.Background())

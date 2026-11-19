@@ -29,17 +29,20 @@ func (c *Cluster) Refill(ctx context.Context, shard, target string) error {
 
 	found := false
 
-	for i, copy := range t.Shards[shard] {
-		if copy.Node == target {
+	for _, holder := range t.Shards[shard] {
+		if holder.Node == target {
 			found = true
-			t.Shards[shard][i].State = "refilling"
-		} else if copy.State == "serving" {
-			donor = copy
+		} else if holder.State == placement.Serving {
+			donor = holder
 		}
 	}
 
 	if !found || donor.Node == "" || c.Nodes[target] == nil || c.Nodes[donor.Node] == nil {
 		return errors.New("refill needs a serving source and configured target")
+	}
+
+	if err = t.Transition(shard, target, placement.Refilling); err != nil {
+		return err
 	}
 
 	t.Generation++
@@ -93,10 +96,8 @@ func (c *Cluster) Refill(ctx context.Context, shard, target string) error {
 		return errors.New("refill checksum differs; target remains non-serving")
 	}
 
-	for i := range t.Shards[shard] {
-		if t.Shards[shard][i].Node == target {
-			t.Shards[shard][i].State = "serving"
-		}
+	if err = t.Transition(shard, target, placement.Serving); err != nil {
+		return err
 	}
 
 	t.Generation++
@@ -562,10 +563,10 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 
 	donor := false
 
-	for _, copy := range t.Shards[shard] {
-		if copy.Node != old && copy.State == "serving" && c.Nodes[copy.Node] != nil {
+	for _, holder := range t.Shards[shard] {
+		if holder.Node != old && holder.State == placement.Serving && c.Nodes[holder.Node] != nil {
 			call, cancel := c.timeout(ctx)
-			_, err := c.copyStore(copy, shard).Read(call, Query{Limit: 1})
+			_, err := c.copyStore(holder, shard).Read(call, Query{Limit: 1})
 
 			cancel()
 
@@ -581,13 +582,13 @@ func (c *Cluster) MoveCopy(ctx context.Context, shard, old, newNode string) erro
 
 	found := false
 
-	for i, copy := range t.Shards[shard] {
-		if copy.Node == newNode {
+	for i, holder := range t.Shards[shard] {
+		if holder.Node == newNode {
 			return errors.New("node already holds shard")
 		}
 
-		if copy.Node == old {
-			t.Shards[shard][i] = placement.Copy{Node: newNode, State: "behind", StoreID: storeID}
+		if holder.Node == old {
+			t.Shards[shard][i] = placement.Copy{Node: newNode, State: placement.Behind, StoreID: storeID}
 			found = true
 		}
 	}

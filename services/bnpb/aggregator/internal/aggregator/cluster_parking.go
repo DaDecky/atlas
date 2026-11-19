@@ -317,17 +317,17 @@ func (c *Cluster) markParking(ctx context.Context, source string, epoch int64, m
 	}
 
 	shard := placement.Shard("metadata:" + source)
-	for _, copy := range t.Shards[shard] {
-		if copy.State == "behind" {
+	for _, holder := range t.Shards[shard] {
+		if holder.State == placement.Behind {
 			continue
 		}
 
-		n := c.Nodes[copy.Node]
+		n := c.Nodes[holder.Node]
 		if n == nil {
 			return errors.New("parking copy unavailable")
 		}
 
-		tx, err := c.copyStore(copy, shard).begin(ctx, false)
+		tx, err := c.copyStore(holder, shard).begin(ctx, false)
 		if err != nil {
 			return err
 		}

@@ -200,9 +200,13 @@ func (c *Cluster) seal(ctx context.Context, source string, epoch int64, strict b
 	}
 	// An unsealed holder must not serve a stale writer's data after takeover.
 	for shard, copies := range table.Shards {
-		for i, copy := range copies {
-			if !sealed[copy.Node] {
-				table.Shards[shard][i].State = "behind"
+		for _, holder := range copies {
+			if sealed[holder.Node] {
+				continue
+			}
+
+			if err = table.Transition(shard, holder.Node, placement.Behind); err != nil {
+				return err
 			}
 		}
 	}
@@ -232,26 +236,22 @@ func (c *Cluster) MarkBehind(ctx context.Context, r BehindRequest) error {
 		return errors.New("unknown shard")
 	}
 
-	found, serving := false, false
+	serving := false
 
-	for i := range copies {
-		if copies[i].Node == r.Copy {
-			copies[i].State = "behind"
-			found = true
-		} else if copies[i].State == "serving" {
+	for _, holder := range copies {
+		if holder.Node != r.Copy && holder.State == placement.Serving {
 			serving = true
 		}
-	}
-
-	if !found {
-		return errors.New("unknown copy")
 	}
 
 	if !serving {
 		return errors.New("mark behind requires another serving copy")
 	}
 
-	table.Shards[r.Shard] = copies
+	if err = table.Transition(r.Shard, r.Copy, placement.Behind); err != nil {
+		return err
+	}
+
 	table.Generation++
 
 	return c.Placement.CompareAndSwap(ctx, v, table)
@@ -562,14 +562,14 @@ func (c *Cluster) lockSource(ctx context.Context, source string) (func(), error)
 		return nil, err
 	}
 
-	for _, copy := range t.Shards[placement.Shard("metadata:"+source)] {
-		if copy.State != "serving" || c.Nodes[copy.Node] == nil {
+	for _, holder := range t.Shards[placement.Shard("metadata:"+source)] {
+		if holder.State != placement.Serving || c.Nodes[holder.Node] == nil {
 			continue
 		}
 
 		call, cancel := c.timeout(ctx)
 
-		tx, err := c.Nodes[copy.Node].Store.coordination.Begin(call)
+		tx, err := c.Nodes[holder.Node].Store.coordination.Begin(call)
 		if err == nil {
 			_, err = tx.Exec(call, `SELECT pg_advisory_xact_lock(419032,hashtext($1))`, source)
 		}

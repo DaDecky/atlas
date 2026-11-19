@@ -312,12 +312,12 @@ func (c *Cluster) Checksum(ctx context.Context, source string) (Checksum, error)
 	for shard, copies := range t.Shards {
 		found := false
 
-		for _, copy := range copies {
-			if copy.State != "serving" || c.Nodes[copy.Node] == nil {
+		for _, holder := range copies {
+			if holder.State != placement.Serving || c.Nodes[holder.Node] == nil {
 				continue
 			}
 
-			s := c.copyStore(copy, shard)
+			s := c.copyStore(holder, shard)
 			call, cancel := c.timeout(ctx)
 			_, err := s.references(call, source, "", true)
 
@@ -384,14 +384,14 @@ func (c *Cluster) Location(ctx context.Context, id string) (LocationResult, erro
 	}
 
 	shard := placement.Shard(id)
-	for i, copy := range t.Shards[shard] {
-		if copy.State != "serving" || c.Nodes[copy.Node] == nil {
+	for i, holder := range t.Shards[shard] {
+		if holder.State != placement.Serving || c.Nodes[holder.Node] == nil {
 			r.Partial = true
 			continue
 		}
 
 		call, cancel := c.timeout(ctx)
-		exists, err := c.copyStore(copy, shard).contains(call, id)
+		exists, err := c.copyStore(holder, shard).contains(call, id)
 
 		cancel()
 
@@ -406,7 +406,7 @@ func (c *Cluster) Location(ctx context.Context, id string) (LocationResult, erro
 				role, unit = "replica", shard+"-r1"
 			}
 
-			r.Locations = append(r.Locations, Location{Node: copy.Node, Unit: unit, Role: role})
+			r.Locations = append(r.Locations, Location{Node: holder.Node, Unit: unit, Role: role})
 		}
 	}
 

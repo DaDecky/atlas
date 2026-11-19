@@ -35,7 +35,7 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 	pending := 0
 
 	for _, holder := range t.Shards[shard] {
-		if holder.State == "behind" {
+		if holder.State == placement.Behind {
 			continue
 		}
 
@@ -147,7 +147,7 @@ func readCopies[T any](ctx context.Context, c *Cluster, copies []placement.Copy,
 	)
 
 	for _, holder := range copies {
-		if holder.State == "serving" && c.Nodes[holder.Node] != nil {
+		if holder.State == placement.Serving && c.Nodes[holder.Node] != nil {
 			serving = append(serving, holder)
 		}
 	}

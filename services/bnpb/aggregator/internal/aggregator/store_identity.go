@@ -62,7 +62,10 @@ func (c *Cluster) detectStore(ctx context.Context, name string) (bool, error) {
 				}
 
 				if count < placement.Shards || (holder.StoreID != "" && holder.StoreID != id) {
-					t.Shards[shard][i].State = "behind"
+					if err = t.Transition(shard, name, placement.Behind); err != nil {
+						return false, err
+					}
+
 					changed = true
 				}
 

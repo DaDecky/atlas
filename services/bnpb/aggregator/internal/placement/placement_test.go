@@ -151,3 +151,38 @@ func TestLeaseUsesObservedVersionForTakeover(t *testing.T) {
 		t.Fatal("renew", err)
 	}
 }
+
+func TestTransitionAllowsOnlyRefillPath(t *testing.T) {
+	for _, tc := range []struct {
+		from, to State
+		allowed  bool
+	}{
+		{Serving, Behind, true},
+		{Refilling, Behind, true},
+		{Behind, Refilling, true},
+		{Refilling, Refilling, true},
+		{Refilling, Serving, true},
+		{Serving, Refilling, false},
+		{Behind, Serving, false},
+		{Serving, Serving, false},
+	} {
+		table := Table{Shards: map[string][]Copy{"shard-0": {{Node: "a", State: tc.from}, {Node: "b", State: Serving}}}}
+
+		err := table.Transition("shard-0", "a", tc.to)
+		if (err == nil) != tc.allowed {
+			t.Errorf("%s to %s: error %v", tc.from, tc.to, err)
+		}
+
+		if want := map[bool]State{true: tc.to, false: tc.from}[tc.allowed]; table.Shards["shard-0"][0].State != want {
+			t.Errorf("%s to %s left state %s", tc.from, tc.to, table.Shards["shard-0"][0].State)
+		}
+	}
+}
+
+func TestTransitionRejectsUnknownCopy(t *testing.T) {
+	table := Table{Shards: map[string][]Copy{"shard-0": {{Node: "a", State: Serving}}}}
+
+	if err := table.Transition("shard-0", "z", Behind); err == nil {
+		t.Fatal("unknown copy accepted")
+	}
+}

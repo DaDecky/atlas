@@ -97,7 +97,7 @@ func (c *Cluster) RecoverOnce(ctx context.Context) error {
 
 	for _, shard := range keys {
 		for _, holder := range table.Shards[shard] {
-			if holder.State == "serving" || !healthy[holder.Node] {
+			if holder.State == placement.Serving || !healthy[holder.Node] {
 				continue
 			}
 
@@ -194,8 +194,8 @@ func (c *Cluster) RebalanceOnce(ctx context.Context) error {
 
 			has := false
 
-			for _, copy := range current.Shards[shard] {
-				if copy.Node == target.Node {
+			for _, holder := range current.Shards[shard] {
+				if holder.Node == target.Node {
 					has = true
 				}
 			}
@@ -206,17 +206,17 @@ func (c *Cluster) RebalanceOnce(ctx context.Context) error {
 
 			old := ""
 
-			for _, copy := range current.Shards[shard] {
+			for _, holder := range current.Shards[shard] {
 				keep := false
 
 				for _, w := range want {
-					if copy.Node == w.Node {
+					if holder.Node == w.Node {
 						keep = true
 					}
 				}
 
 				if !keep {
-					old = copy.Node
+					old = holder.Node
 					break
 				}
 			}
