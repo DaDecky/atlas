@@ -7,18 +7,22 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
 
-type ReplaySource func(context.Context, int) (int, error)
+type ReplaySource func(context.Context, int, string) (int, error)
 
 type OpsAPI struct {
-	Parking Parking
-	Token   string
-	Replay  map[string]ReplaySource
+	Parking  Parking
+	Token    string
+	Replay   map[string]ReplaySource
+	Requests *ReplayRequests
 }
+
+var replayReasonCode = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
 func (a *OpsAPI) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -103,10 +107,7 @@ func (a *OpsAPI) unprocessed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *OpsAPI) replay(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Source string `json:"source"`
-		Limit  int    `json:"limit"`
-	}
+	var input ReplayRequest
 
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 4097))
 	decoder.DisallowUnknownFields()
@@ -126,13 +127,30 @@ func (a *OpsAPI) replay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !input.validReason() {
+		auditError(w, 400, "bad_request", "reason_code tidak valid")
+		return
+	}
+
+	if a.Requests != nil && (input.Source == "BMKG" || input.Source == "PVMBG") {
+		id, err := a.Requests.Enqueue(r.Context(), input)
+		if err != nil {
+			auditError(w, 503, "replay_unavailable", "permintaan replay belum tersimpan")
+			return
+		}
+
+		writeJSON(w, http.StatusAccepted, map[string]string{"request_id": id, "status": "queued", "source": input.Source})
+
+		return
+	}
+
 	replay := a.Replay[input.Source]
 	if replay == nil {
 		auditError(w, 503, "source_not_leader", "replay hanya dijalankan pemegang sumber")
 		return
 	}
 
-	count, err := replay(r.Context(), input.Limit)
+	count, err := replay(r.Context(), input.Limit, input.ReasonCode)
 	if err != nil {
 		auditError(w, 503, "replay_unavailable", "pemrosesan ulang belum berhasil")
 		return

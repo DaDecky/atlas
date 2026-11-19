@@ -39,6 +39,7 @@ type Parking interface {
 	Park(context.Context, ParkedMessage) error
 	ListUnprocessed(context.Context, string, string, int) (ParkingPage, error)
 	Replay(context.Context, string, int64, int, func(ParkedMessage) (HazardEvent, error)) (int, error)
+	ReplayReason(context.Context, string, int64, int, string, func(ParkedMessage) (HazardEvent, error)) (int, error)
 	RetryDue(context.Context, string, int64, int, func(ParkedMessage) (HazardEvent, error)) (int, error)
 }
 
@@ -163,14 +164,18 @@ func (s *Store) ListUnprocessed(ctx context.Context, source, cursor string, limi
 
 // Replay serializes source commits and atomically recovers each ordered batch.
 func (s *Store) Replay(ctx context.Context, source string, epoch int64, limit int, decode func(ParkedMessage) (HazardEvent, error)) (int, error) {
-	return s.replay(ctx, source, epoch, limit, decode, false)
+	return s.ReplayReason(ctx, source, epoch, limit, "", decode)
+}
+
+func (s *Store) ReplayReason(ctx context.Context, source string, epoch int64, limit int, reason string, decode func(ParkedMessage) (HazardEvent, error)) (int, error) {
+	return s.replay(ctx, source, epoch, limit, reason, decode, false)
 }
 
 func (s *Store) RetryDue(ctx context.Context, source string, epoch int64, limit int, decode func(ParkedMessage) (HazardEvent, error)) (int, error) {
-	return s.replay(ctx, source, epoch, limit, decode, true)
+	return s.replay(ctx, source, epoch, limit, "", decode, true)
 }
 
-func (s *Store) replay(ctx context.Context, source string, epoch int64, limit int, decode func(ParkedMessage) (HazardEvent, error), dueOnly bool) (int, error) {
+func (s *Store) replay(ctx context.Context, source string, epoch int64, limit int, reason string, decode func(ParkedMessage) (HazardEvent, error), dueOnly bool) (int, error) {
 	if limit < 1 || limit > 1000 {
 		return 0, errors.New("invalid limit")
 	}
@@ -190,7 +195,7 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 		return 0, ErrStaleEpoch
 	}
 
-	pending, err := pendingParking(ctx, tx, source, limit, dueOnly, true)
+	pending, err := pendingParking(ctx, tx, source, limit, reason, dueOnly, true)
 	if err != nil {
 		return 0, err
 	}
@@ -259,8 +264,11 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 	return recovered, tx.Commit(ctx)
 }
 
-func pendingParking(ctx context.Context, tx pgx.Tx, source string, limit int, dueOnly, lock bool) ([]ParkedMessage, error) {
+func pendingParking(ctx context.Context, tx pgx.Tx, source string, limit int, reason string, dueOnly, lock bool) ([]ParkedMessage, error) {
 	query := `SELECT ` + parkingColumns + ` FROM unprocessed_messages m WHERE m.source=$1 AND m.status<>'recovered'
+ AND ($4='' OR (m.reason_code=$4 AND NOT EXISTS(
+ SELECT 1 FROM unprocessed_messages p WHERE p.source=m.source AND p.source_ref_id=m.source_ref_id
+ AND p.status<>'recovered' AND p.reason_code<>$4 AND (p.received_at,p.message_id)<(m.received_at,m.message_id))))
  AND (NOT $3 OR (m.status='retrying' AND m.next_attempt_at<=now() AND NOT EXISTS(
  SELECT 1 FROM unprocessed_messages p WHERE p.source=m.source AND p.source_ref_id=m.source_ref_id
  AND p.status<>'recovered' AND (p.received_at,p.message_id)<(m.received_at,m.message_id))))
@@ -269,7 +277,7 @@ func pendingParking(ctx context.Context, tx pgx.Tx, source string, limit int, du
 		query += " FOR UPDATE"
 	}
 
-	rows, err := tx.Query(ctx, query, source, limit, dueOnly)
+	rows, err := tx.Query(ctx, query, source, limit, dueOnly, reason)
 	if err != nil {
 		return nil, err
 	}
@@ -294,14 +302,14 @@ func pendingParking(ctx context.Context, tx pgx.Tx, source string, limit int, du
 	return pending, rows.Err()
 }
 
-func (s *Store) dueParking(ctx context.Context, source string, limit int) ([]ParkedMessage, error) {
+func (s *Store) replayCandidates(ctx context.Context, source string, limit int, reason string, dueOnly bool) ([]ParkedMessage, error) {
 	tx, err := s.begin(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
-	items, err := pendingParking(ctx, tx, source, limit, true, false)
+	items, err := pendingParking(ctx, tx, source, limit, reason, dueOnly, false)
 	if err != nil {
 		return nil, err
 	}

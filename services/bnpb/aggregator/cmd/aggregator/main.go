@@ -40,8 +40,6 @@ func run(log *slog.Logger) error {
 
 	defer store.Close()
 
-	pending := make(chan aggregator.Publication, c.PublishCapacity)
-
 	var wg sync.WaitGroup
 
 	launch := func(f func(context.Context)) {
@@ -118,13 +116,12 @@ func run(log *slog.Logger) error {
 			FailureMarkTimeout: c.FailureMarkTimeout,
 			Client:             client,
 			Store:              ingest,
-			Pending:            pending,
 			Log:                log,
 			PolicyFile:         os.Getenv("SOURCE_SCHEMA_POLICY_FILE"),
 		}
 		if writer, ok := ingest.(*aggregator.EpochIngest); ok {
-			replay[source] = func(ctx context.Context, limit int) (int, error) {
-				return store.Replay(ctx, source, writer.WriterEpoch, limit, func(message aggregator.ParkedMessage) (aggregator.HazardEvent, error) {
+			replay[source] = func(ctx context.Context, limit int, reason string) (int, error) {
+				return store.ReplayReason(ctx, source, writer.WriterEpoch, limit, reason, func(message aggregator.ParkedMessage) (aggregator.HazardEvent, error) {
 					return poller.DecodeParked(ctx, message)
 				})
 			}

@@ -4,9 +4,126 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestIntegrationReplayReasonPreservesOrder(t *testing.T) {
+	checkReplayReasonOrder(t, integrationStore(t))
+}
+
+func TestOpsReplayReasonContract(t *testing.T) {
+	calls := 0
+	api := (&OpsAPI{Token: "internal-test-token", Replay: map[string]ReplaySource{
+		"PVMBG": func(_ context.Context, limit int, reason string) (int, error) {
+			calls++
+
+			if limit != 100 || reason != "schema_violation" {
+				t.Fatalf("unexpected dispatch: limit %d, reason %q", limit, reason)
+			}
+
+			return 2, nil
+		},
+	}}).Handler()
+
+	for _, tc := range []struct {
+		body string
+		code int
+	}{
+		{`{"source":"PVMBG","reason_code":"schema_violation"}`, http.StatusOK},
+		{`{"source":"PVMBG","reason_code":"*"}`, http.StatusBadRequest},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/internal/ops/replay", strings.NewReader(tc.body))
+		request.Header.Set("Authorization", "Bearer internal-test-token")
+
+		response := httptest.NewRecorder()
+		api.ServeHTTP(response, request)
+
+		if response.Code != tc.code {
+			t.Fatalf("response %d, want %d: %s", response.Code, tc.code, response.Body)
+		}
+	}
+
+	if calls != 1 {
+		t.Fatalf("replay dispatched %d times, want 1", calls)
+	}
+}
+
+func TestDataIntegrationReplayReasonPreservesOrder(t *testing.T) {
+	checkReplayReasonOrder(t, dataCluster(t))
+}
+
+func checkReplayReasonOrder(t *testing.T, store Parking) {
+	t.Helper()
+
+	ctx := context.Background()
+	now := time.Now().UTC().Add(-time.Minute)
+	rows := []struct{ id, ref, reason string }{
+		{"older", "same-ref", "schema_violation"},
+		{"newer", "same-ref", "invalid_utf8"},
+		{"unrelated", "other-ref", "invalid_utf8"},
+	}
+
+	for i, row := range rows {
+		if err := store.Park(ctx, ParkedMessage{MessageID: row.id, Source: "PVMBG", SourceRefID: row.ref, ReceivedAt: now.Add(time.Duration(i) * time.Second), Raw: []byte("{}"), ReasonCode: row.reason, Reason: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var decoded []string
+
+	decode := func(m ParkedMessage) (HazardEvent, error) {
+		decoded = append(decoded, m.MessageID)
+		return contractEvent(m.Source, m.SourceRefID, m.ReceivedAt), nil
+	}
+
+	for _, tc := range []struct {
+		reason string
+		count  int
+	}{{"invalid_utf8", 1}, {"invalid_utf8", 0}, {"schema_violation", 1}, {"invalid_utf8", 1}, {"invalid_utf8", 0}} {
+		count, err := store.ReplayReason(ctx, "PVMBG", 1, 100, tc.reason, decode)
+		if err != nil || count != tc.count {
+			t.Fatalf("reason %s recovered %d, want %d: %v", tc.reason, count, tc.count, err)
+		}
+	}
+
+	if !slices.Equal(decoded, []string{"unrelated", "older", "newer"}) {
+		t.Fatalf("incorrect replay selection/order: %v", decoded)
+	}
+
+	if err := store.Park(ctx, ParkedMessage{MessageID: "concurrent", Source: "PVMBG", SourceRefID: "concurrent", ReceivedAt: now, Raw: []byte("{}"), ReasonCode: "schema_violation", Reason: "test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests sync.WaitGroup
+
+	var recovered atomic.Int64
+
+	for range 2 {
+		requests.Go(func() {
+			count, err := store.ReplayReason(ctx, "PVMBG", 1, 100, "schema_violation", func(m ParkedMessage) (HazardEvent, error) {
+				return contractEvent(m.Source, m.SourceRefID, m.ReceivedAt), nil
+			})
+			if err != nil {
+				t.Error(err)
+			}
+
+			recovered.Add(int64(count))
+		})
+	}
+
+	requests.Wait()
+
+	if recovered.Load() != 1 {
+		t.Fatalf("concurrent replay recovered %d copies of one message", recovered.Load())
+	}
+}
 
 func TestIntegrationParkingByteBoundAndDueRetryFairness(t *testing.T) {
 	s := integrationStore(t)

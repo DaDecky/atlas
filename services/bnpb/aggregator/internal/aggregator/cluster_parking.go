@@ -147,14 +147,22 @@ func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, li
 }
 
 func (c *Cluster) Replay(ctx context.Context, source string, epoch int64, limit int, decode func(ParkedMessage) (HazardEvent, error)) (int, error) {
-	return c.replay(ctx, source, epoch, limit, decode, false)
+	return c.ReplayReason(ctx, source, epoch, limit, "", decode)
+}
+
+func (c *Cluster) ReplayReason(ctx context.Context, source string, epoch int64, limit int, reason string, decode func(ParkedMessage) (HazardEvent, error)) (int, error) {
+	return c.replay(ctx, source, epoch, limit, reason, decode, false)
 }
 
 func (c *Cluster) RetryDue(ctx context.Context, source string, epoch int64, limit int, decode func(ParkedMessage) (HazardEvent, error)) (int, error) {
-	return c.replay(ctx, source, epoch, limit, decode, true)
+	return c.replay(ctx, source, epoch, limit, "", decode, true)
 }
 
-func (c *Cluster) replay(ctx context.Context, source string, epoch int64, limit int, decode func(ParkedMessage) (HazardEvent, error), dueOnly bool) (int, error) {
+func (c *Cluster) replay(ctx context.Context, source string, epoch int64, limit int, reason string, decode func(ParkedMessage) (HazardEvent, error), dueOnly bool) (int, error) {
+	if limit < 1 || limit > 1000 {
+		return 0, errors.New("invalid limit")
+	}
+
 	release, err := c.lockSource(ctx, source)
 	if err != nil {
 		return 0, err
@@ -172,11 +180,11 @@ func (c *Cluster) replay(ctx context.Context, source string, epoch int64, limit 
 
 	var page ParkingPage
 
-	if dueOnly {
+	if dueOnly || reason != "" {
 		err = c.metadata(ctx, source, func(s *Store) error {
 			var inner error
 
-			page.Items, inner = s.dueParking(ctx, source, limit)
+			page.Items, inner = s.replayCandidates(ctx, source, limit, reason, dueOnly)
 
 			return inner
 		})
