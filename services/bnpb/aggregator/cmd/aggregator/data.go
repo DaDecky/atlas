@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"os"
 	"time"
@@ -41,18 +40,4 @@ func dataHandler(api *aggregator.API, store runtimeData, c aggregator.Config, re
 	mux.Handle("/", api.Handler())
 
 	return mux
-}
-
-func ingestData(ctx context.Context, store runtimeData, source string) (aggregator.IngestStore, error) {
-	if local, ok := store.(*aggregator.Store); ok {
-		epoch, err := local.Epoch(ctx, source)
-		if err != nil {
-			return nil, err
-		}
-
-		return &aggregator.EpochIngest{Data: local, Source: source, WriterEpoch: epoch}, nil
-	}
-	// Fail closed instead of running three uncoordinated M1 pollers. Razi starts
-	// EpochIngest only while holding the source Leadership contract.
-	return nil, errors.New("cluster ingestion requires source leadership; set M2_READ_ONLY=1 to serve data routes only")
 }

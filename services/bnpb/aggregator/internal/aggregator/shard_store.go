@@ -72,6 +72,10 @@ func (s *Store) Epoch(ctx context.Context, source string) (int64, error) {
 // Seal is monotonic and idempotent. Updating the row waits for in-flight writes
 // holding its lock; after this returns, an older epoch cannot commit a new write.
 func (s *Store) Seal(ctx context.Context, source string, epoch int64) error {
+	return s.seal(ctx, source, epoch, false)
+}
+
+func (s *Store) seal(ctx context.Context, source string, epoch int64, strict bool) error {
 	if epoch < 1 {
 		return ErrStaleEpoch
 	}
@@ -80,13 +84,27 @@ func (s *Store) Seal(ctx context.Context, source string, epoch int64) error {
 
 	err := s.ingest.QueryRow(ctx, `
 		UPDATE public.source_fence SET epoch = $2
-		WHERE source = $1 AND epoch <= $2
-		RETURNING epoch`, source, epoch).Scan(&sealed)
+		WHERE source = $1 AND (epoch < $2 OR (NOT $3 AND epoch = $2))
+		RETURNING epoch`, source, epoch, strict).Scan(&sealed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrStaleEpoch
 	}
 
 	return err
+}
+
+func checkWriterEpoch(ctx context.Context, tx pgx.Tx, source string, expected int64) error {
+	var current int64
+
+	if err := tx.QueryRow(ctx, `SELECT epoch FROM public.source_fence WHERE source=$1 FOR SHARE`, source).Scan(&current); err != nil {
+		return err
+	}
+
+	if current != expected {
+		return ErrStaleEpoch
+	}
+
+	return nil
 }
 
 func (s *Store) Upsert(ctx context.Context, batch WriteBatch) ([]HazardEvent, error) {

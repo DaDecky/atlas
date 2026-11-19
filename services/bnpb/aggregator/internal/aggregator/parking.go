@@ -58,6 +58,10 @@ func scanParked(row pgx.Row) (ParkedMessage, error) {
 }
 
 func (s *Store) Park(ctx context.Context, m ParkedMessage) error {
+	return s.park(ctx, m, 0)
+}
+
+func (s *Store) park(ctx context.Context, m ParkedMessage, epoch int64) error {
 	if m.MessageID == "" || !validSource(m.Source) || m.ReceivedAt.IsZero() || m.ReasonCode == "" || m.Reason == "" {
 		return errors.New("parking metadata required")
 	}
@@ -86,6 +90,12 @@ func (s *Store) Park(ctx context.Context, m ParkedMessage) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	if epoch > 0 {
+		if err = checkWriterEpoch(ctx, tx, m.Source, epoch); err != nil {
+			return err
+		}
+	}
 
 	_, err = tx.Exec(ctx, `INSERT INTO unprocessed_messages (`+parkingColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(message_id) DO NOTHING`, m.MessageID, m.Source, m.ReceivedAt, m.SourceRefID, m.Raw, m.RawLength, m.RawSHA256, m.RawCut, m.ReasonCode, m.Reason, m.Retryable, m.Attempts, m.NextAttemptAt, m.Status, m.CorrelationID)
 	if err != nil {
@@ -268,10 +278,10 @@ func pendingParking(ctx context.Context, tx pgx.Tx, source string, limit int, re
 	query := `SELECT ` + parkingColumns + ` FROM unprocessed_messages m WHERE m.source=$1 AND m.status<>'recovered' AND m.reason_code<>'publish_failed'
  AND ($4='' OR (m.reason_code=$4 AND NOT EXISTS(
  SELECT 1 FROM unprocessed_messages p WHERE p.source=m.source AND p.source_ref_id=m.source_ref_id
- AND p.status<>'recovered' AND p.reason_code<>$4 AND (p.received_at,p.message_id)<(m.received_at,m.message_id))))
+ AND p.status<>'recovered' AND p.reason_code<>'publish_failed' AND p.reason_code<>$4 AND (p.received_at,p.message_id)<(m.received_at,m.message_id))))
  AND (NOT $3 OR (m.status='retrying' AND m.next_attempt_at<=now() AND NOT EXISTS(
  SELECT 1 FROM unprocessed_messages p WHERE p.source=m.source AND p.source_ref_id=m.source_ref_id
- AND p.status<>'recovered' AND (p.received_at,p.message_id)<(m.received_at,m.message_id))))
+ AND p.status<>'recovered' AND p.reason_code<>'publish_failed' AND (p.received_at,p.message_id)<(m.received_at,m.message_id))))
  ORDER BY m.received_at,m.message_id LIMIT $2`
 	if lock {
 		query += " FOR UPDATE"

@@ -16,14 +16,26 @@ import (
 // Parking uses reserved metadata shards so it has the same two-copy placement
 // and refill lifecycle as source state. Recovery marks follow idempotent writes.
 func (c *Cluster) Park(ctx context.Context, m ParkedMessage) error {
+	return c.park(ctx, m, 0)
+}
+
+func (c *Cluster) park(ctx context.Context, m ParkedMessage, epoch int64) error {
 	t, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return err
 	}
 
+	if epoch == 0 {
+		epoch = t.WriterEpochs[m.Source]
+	}
+
+	if epoch != t.WriterEpochs[m.Source] {
+		return ErrStaleEpoch
+	}
+
 	shard := placement.Shard("metadata:" + m.Source)
-	_, err = c.replicate(ctx, t, shard, m.Source, t.WriterEpochs[m.Source], func(call context.Context, s *Store) ([]HazardEvent, error) {
-		return nil, s.Park(call, m)
+	_, err = c.replicate(ctx, t, shard, m.Source, epoch, func(call context.Context, s *Store) ([]HazardEvent, error) {
+		return nil, s.park(call, m, epoch)
 	})
 
 	return err

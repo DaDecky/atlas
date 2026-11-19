@@ -136,12 +136,43 @@ func (c *Cluster) Epoch(ctx context.Context, source string) (int64, error) {
 }
 
 func (c *Cluster) Seal(ctx context.Context, source string, epoch int64) error {
+	return c.seal(ctx, source, epoch, false)
+}
+
+// AcquireWriterEpoch may only run while holding the source lease. A proposal
+// must exceed the latest reachable majority epoch and the placement record.
+// Strict acceptance and quorum intersection prevent reusing an epoch.
+func (c *Cluster) AcquireWriterEpoch(ctx context.Context, source string) (int64, error) {
+	highest, err := c.Epoch(ctx, source)
+	if err != nil {
+		return 0, err
+	}
+
+	table, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	highest = max(highest, table.WriterEpochs[source])
+	if highest == 1<<63-1 {
+		return 0, errors.New("source epoch exhausted")
+	}
+
+	next := highest + 1
+	if err = c.seal(ctx, source, next, true); err != nil {
+		return 0, err
+	}
+
+	return next, nil
+}
+
+func (c *Cluster) seal(ctx context.Context, source string, epoch int64, strict bool) error {
 	table, v, err := c.Placement.Load(ctx)
 	if err != nil {
 		return err
 	}
 
-	if epoch < table.WriterEpochs[source] {
+	if epoch < table.WriterEpochs[source] || strict && epoch == table.WriterEpochs[source] {
 		return ErrStaleEpoch
 	}
 
@@ -150,7 +181,7 @@ func (c *Cluster) Seal(ctx context.Context, source string, epoch int64) error {
 
 	for name, n := range c.Nodes {
 		call, cancel := c.timeout(ctx)
-		err = n.Store.Seal(call, source, epoch)
+		err = n.Store.seal(call, source, epoch, strict)
 
 		cancel()
 

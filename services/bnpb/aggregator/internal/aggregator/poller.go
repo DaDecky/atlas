@@ -38,6 +38,7 @@ type Poller struct {
 	Pending                     chan<- Publication
 	Log                         *slog.Logger
 	PolicyFile                  string
+	Guard                       func(context.Context) error
 }
 
 func pause(ctx context.Context, d time.Duration) bool {
@@ -56,6 +57,12 @@ func (p *Poller) fetch(ctx context.Context, path string, since *time.Time, id st
 	for attempt := 0; attempt <= p.Retries; attempt++ {
 		if attempt > 0 && !pause(ctx, p.Backoff*time.Duration(1<<(attempt-1))) {
 			return nil, ctx.Err()
+		}
+
+		if p.Guard != nil {
+			if err := p.Guard(ctx); err != nil {
+				return nil, err
+			}
 		}
 
 		records, status, err := p.fetchOnce(ctx, path, since, id)
@@ -309,6 +316,12 @@ func (p *Poller) Poll(ctx context.Context, id string) error {
 
 		for _, h := range old {
 			events = append(events, ApplyWarnings(h, warnings))
+		}
+	}
+
+	if p.Guard != nil {
+		if err = p.Guard(ctx); err != nil {
+			return err
 		}
 	}
 

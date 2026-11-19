@@ -38,12 +38,14 @@ func (e *EpochIngest) Park(ctx context.Context, message ParkedMessage) error {
 		return errors.New("parking writer is bound to another source")
 	}
 
-	parking, ok := e.Data.(Parking)
-	if !ok {
-		return errors.New("parking unavailable")
+	switch data := e.Data.(type) {
+	case *Store:
+		return data.park(ctx, message, e.WriterEpoch)
+	case *Cluster:
+		return data.park(ctx, message, e.WriterEpoch)
 	}
 
-	return parking.Park(ctx, message)
+	return errors.New("parking unavailable")
 }
 
 // OpenClusterConfig reads mounted configuration containing node DSNs and API
@@ -168,11 +170,15 @@ func (e *EpochIngest) Save(ctx context.Context, source string, events []HazardEv
 }
 
 func (e *EpochIngest) Failure(ctx context.Context, source string, now time.Time) error {
+	if source != e.Source {
+		return errors.New("freshness writer is bound to another source")
+	}
+
 	switch data := e.Data.(type) {
 	case *Store:
-		return data.Failure(ctx, source, now)
+		return data.failureEpoch(ctx, source, now, e.WriterEpoch)
 	case *Cluster:
-		return data.Failure(ctx, source, now)
+		return data.failureEpoch(ctx, source, now, e.WriterEpoch)
 	}
 
 	return errors.New("unsupported freshness store")
@@ -190,36 +196,46 @@ func (e *EpochIngest) WarningEvents(ctx context.Context, refs []string) ([]Hazar
 }
 
 func (c *Cluster) Failure(ctx context.Context, source string, now time.Time) error {
+	return c.failureEpoch(ctx, source, now, 0)
+}
+
+func (c *Cluster) failureEpoch(ctx context.Context, source string, now time.Time, epoch int64) error {
 	t, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return err
 	}
 
-	for _, copy := range t.Shards[placement.Shard("metadata:"+source)] {
-		if copy.State == "behind" || c.Nodes[copy.Node] == nil {
-			continue
-		}
-
-		s := c.copyStore(copy, placement.Shard("metadata:"+source))
-
-		tx, err := s.begin(ctx, false)
-		if err != nil {
-			return err
-		}
-
-		_, err = tx.Exec(ctx, `UPDATE source_progress SET stale_since=COALESCE(stale_since,$2) WHERE source=$1`, source, now)
-		if err == nil {
-			err = tx.Commit(ctx)
-		}
-
-		_ = tx.Rollback(ctx)
-
-		if err != nil {
-			return err
-		}
+	if epoch == 0 {
+		epoch = t.WriterEpochs[source]
 	}
 
-	return nil
+	if epoch != t.WriterEpochs[source] {
+		return ErrStaleEpoch
+	}
+
+	_, err = c.replicate(ctx, t, placement.Shard("metadata:"+source), source, epoch, func(call context.Context, s *Store) ([]HazardEvent, error) {
+		return nil, s.failureEpoch(call, source, now, epoch)
+	})
+
+	return err
+}
+
+func (s *Store) failureEpoch(ctx context.Context, source string, now time.Time, epoch int64) error {
+	tx, err := s.begin(ctx, false)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err = checkWriterEpoch(ctx, tx, source, epoch); err != nil {
+		return err
+	}
+
+	if _, err = tx.Exec(ctx, `UPDATE source_progress SET stale_since=COALESCE(stale_since,$2) WHERE source=$1`, source, now); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (c *Cluster) WarningEvents(ctx context.Context, refs []string) ([]HazardEvent, error) {
