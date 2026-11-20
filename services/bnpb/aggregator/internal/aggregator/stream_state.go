@@ -105,7 +105,7 @@ func (s *Store) verifyStreamCommit(ctx context.Context, source string, state Str
 	var matches bool
 
 	err = tx.QueryRow(ctx, "SELECT committed_offset=$2 AND payload=$3::jsonb FROM stream_state WHERE source=$1",
-		source, state.Offset, string(state.Payload)).Scan(&matches)
+		source, state.Offset, state.Payload).Scan(&matches)
 
 	return err == nil && matches
 }

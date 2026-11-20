@@ -1,6 +1,7 @@
 package aggregator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,11 @@ type WriteBatch struct {
 type StreamState struct {
 	Offset  int64
 	Payload json.RawMessage
+}
+
+func (s StreamState) valid() bool {
+	payload := bytes.TrimSpace(s.Payload)
+	return s.Offset >= 0 && len(payload) != 0 && payload[0] == '{' && json.Valid(payload)
 }
 
 // BehindRequest identifies a placement compare-and-swap authorized by the
@@ -122,9 +128,7 @@ func (s *Store) CommitCheckpoint(ctx context.Context, batch WriteBatch, checkpoi
 }
 
 func (s *Store) CommitState(ctx context.Context, batch WriteBatch, state StreamState) ([]HazardEvent, error) {
-	var object map[string]json.RawMessage
-
-	if state.Offset < 0 || json.Unmarshal(state.Payload, &object) != nil || object == nil {
+	if !state.valid() {
 		return nil, errors.New("stream state requires a nonnegative offset and a JSON object")
 	}
 
@@ -210,7 +214,7 @@ func (s *Store) commitBatch(ctx context.Context, batch WriteBatch, checkpoint *t
 			INSERT INTO stream_state (source, committed_offset, payload) VALUES ($1, $2, $3::jsonb)
 			ON CONFLICT (source) DO UPDATE SET
 				committed_offset = EXCLUDED.committed_offset, payload = EXCLUDED.payload`,
-			batch.Source, state.Offset, string(state.Payload))
+			batch.Source, state.Offset, state.Payload)
 		if err != nil {
 			return nil, err
 		}

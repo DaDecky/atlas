@@ -2,7 +2,6 @@ package aggregator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -278,11 +277,8 @@ func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time
 		return nil, errors.New("checkpoint required")
 	}
 
-	if state != nil {
-		var object map[string]json.RawMessage
-		if state.Offset < 0 || json.Unmarshal(state.Payload, &object) != nil || object == nil {
-			return nil, errors.New("invalid stream state")
-		}
+	if state != nil && !state.valid() {
+		return nil, errors.New("invalid stream state")
 	}
 
 	if !b.sourceLocked {
