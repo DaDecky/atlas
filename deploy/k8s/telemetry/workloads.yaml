@@ -1,0 +1,156 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: victoriametrics-data
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victoriametrics
+  labels:
+    role: other
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victoriametrics
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: victoriametrics
+        role: other
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: atlas-node-a
+      securityContext:
+        fsGroup: 65534
+      containers:
+        - name: victoriametrics
+          image: victoriametrics/victoria-metrics:v1.156.0@sha256:da8a90ac0912f16589be2b96a6441a2fca4bca415c83783d972d92e3b5b66970
+          args:
+            - -retentionPeriod=7d
+            - -opentelemetry.usePrometheusNaming
+            - -storageDataPath=/data
+            - -vmui.customDashboardsPath=/dashboards
+          ports:
+            - name: http
+              containerPort: 8428
+          resources:
+            requests:
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: dashboard
+              mountPath: /dashboards
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: victoriametrics-data
+        - name: dashboard
+          configMap:
+            name: atlas-dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victoriametrics
+spec:
+  selector:
+    app: victoriametrics
+  ports:
+    - name: http
+      port: 8428
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  labels:
+    role: other
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jaeger
+  template:
+    metadata:
+      labels:
+        app: jaeger
+        role: other
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: atlas-node-a
+      containers:
+        - name: jaeger
+          image: jaegertracing/jaeger:2.23.0@sha256:3823829974ccfc2485d2e48b165579091f32295022ae80ca49704e2f4834116e
+          args: [--config, /etc/jaeger/jaeger.yaml]
+          ports:
+            - name: otlp
+              containerPort: 4318
+            - name: query
+              containerPort: 16686
+            - name: health
+              containerPort: 13133
+          resources:
+            requests:
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: health
+            periodSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: health
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/jaeger
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: jaeger-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+spec:
+  selector:
+    app: jaeger
+  ports:
+    - name: otlp
+      port: 4318
+      targetPort: otlp
+    - name: query
+      port: 16686
+      targetPort: query
