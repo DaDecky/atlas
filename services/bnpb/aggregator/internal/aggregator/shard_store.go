@@ -43,11 +43,6 @@ type StreamState struct {
 	Payload json.RawMessage
 }
 
-func (s StreamState) valid() bool {
-	payload := bytes.TrimSpace(s.Payload)
-	return s.Offset >= 0 && len(payload) != 0 && payload[0] == '{' && json.Valid(payload)
-}
-
 // BehindRequest identifies a placement compare-and-swap authorized by the
 // source's current writer. Replica code must reject an outdated generation or
 // epoch before permitting a single-copy write. B1 has no replica placement.
@@ -125,6 +120,11 @@ func (s *Store) CommitCheckpoint(ctx context.Context, batch WriteBatch, checkpoi
 	}
 
 	return s.commitBatch(ctx, batch, &checkpoint, nil)
+}
+
+func (s StreamState) valid() bool {
+	payload := bytes.TrimSpace(s.Payload)
+	return s.Offset >= 0 && len(payload) != 0 && payload[0] == '{' && json.Valid(payload)
 }
 
 func (s *Store) CommitState(ctx context.Context, batch WriteBatch, state StreamState) ([]HazardEvent, error) {
