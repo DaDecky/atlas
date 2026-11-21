@@ -1,0 +1,24 @@
+{
+  "title": "Atlas HTTP requests",
+  "rows": [
+    {
+      "panels": [
+        {
+          "title": "Requests per second by service",
+          "width": 4,
+          "expr": ["sum(rate(http_server_request_duration_seconds_count[1m])) by (service_name)"]
+        },
+        {
+          "title": "5xx requests per second by service",
+          "width": 4,
+          "expr": ["sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[1m])) by (service_name)"]
+        },
+        {
+          "title": "p95 request duration by service (seconds)",
+          "width": 4,
+          "expr": ["histogram_quantile(0.95, sum(rate(http_server_request_duration_seconds_bucket[1m])) by (le, service_name))"]
+        }
+      ]
+    }
+  ]
+}
