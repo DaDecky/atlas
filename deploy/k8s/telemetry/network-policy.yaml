@@ -1,0 +1,39 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: victoriametrics-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: victoriametrics
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [aggregator, auth, client-api]
+      ports:
+        - protocol: TCP
+          port: 8428
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: jaeger-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: jaeger
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [aggregator, auth, client-api]
+      ports:
+        - protocol: TCP
+          port: 4318

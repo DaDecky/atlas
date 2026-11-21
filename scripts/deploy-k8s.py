@@ -83,6 +83,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--overlay", choices=["dev", "demo"], default="dev")
     parser.add_argument("--enable-ingestion", action="store_true", help="run lease-managed ingestion on the replicated demo topology")
+    parser.add_argument("--enable-telemetry", action="store_true", help="deploy VictoriaMetrics and Jaeger on atlas-node-a")
     parser.add_argument("--kubeconfig")
     parser.add_argument("--context")
     parser.add_argument("--namespace", default=NS, help="isolated namespace for a dev deployment")
@@ -190,6 +191,8 @@ def main():
         secret(name + "-credentials", {"AMQP_URL": broker})
     secret("pantai-token", {"token": values["PANTAI_AUTH_TOKEN"]})
     overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "namespace": NS, "resources": ["../deploy/k8s/overlays/" + args.overlay], "images": [{"name": "atlas/" + name, "newTag": args.tag} for name in SERVICES]}
+    if args.enable_telemetry:
+        overlay["resources"].append("../deploy/k8s/telemetry")
     if args.enable_ingestion:
         ingest = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "aggregator"},
                   "spec": {"template": {"spec": {"containers": [{"name": "aggregator", "env": [{"name": "INGESTION_DISABLED", "value": "0"}]}]}}}}
@@ -219,6 +222,9 @@ def main():
     for name in SERVICES:
         run(kube + ["-n", NS, "rollout", "status", "deployment/" + name, "--timeout=300s"])
     run(kube + ["-n", NS, "rollout", "status", "deployment/sensor-pantai", "--timeout=300s"])
+    if args.enable_telemetry:
+        for name in ["victoriametrics", "jaeger"]:
+            run(kube + ["-n", NS, "rollout", "status", "deployment/" + name, "--timeout=180s"])
     (cache / "last-deploy.json").write_text(json.dumps({"tag": args.tag, "overlay": args.overlay, "namespace": NS}, indent=2) + "\n", encoding="utf-8")
     print("Deployment ready:", args.overlay, "tag", args.tag, flush=True)
     if args.overlay == "demo":
