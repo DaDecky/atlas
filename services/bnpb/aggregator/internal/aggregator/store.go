@@ -281,38 +281,7 @@ func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
 		return out, errors.New("limit must be between 1 and 1000")
 	}
 
-	timeColumn, order, comparison := "occurred_at", "occurred_at DESC, hazard_id", "(occurred_at < $6 OR (occurred_at = $6 AND hazard_id > $7))"
-	if q.Audit {
-		timeColumn, order, comparison = "ingested_at", "ingested_at ASC, hazard_id", "(ingested_at > $6 OR (ingested_at = $6 AND hazard_id > $7))"
-	}
-
-	var after *time.Time
-	if q.Cursor != "" {
-		after = &cursor.Time
-	}
-
-	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM hazard_events
- WHERE ($1 = '' OR source = $1) AND ($2 = '' OR hazard_type = $2)
- AND ($3 = '' OR severity = $3) AND ($4::timestamptz IS NULL OR `+timeColumn+` >= $4)
- AND ($6::timestamptz IS NULL OR `+comparison+`)
- ORDER BY `+order+` LIMIT $5`, q.Source, q.HazardType, q.Severity, q.Since, q.Limit+1, after, cursor.ID)
-	if err != nil {
-		return out, err
-	}
-
-	for rows.Next() {
-		h, err := scanEvent(rows)
-		if err != nil {
-			rows.Close()
-			return out, err
-		}
-
-		out.Data = append(out.Data, h)
-	}
-
-	err = rows.Err()
-	rows.Close()
-
+	out.Data, err = readEventPage(ctx, tx, q, cursor)
 	if err != nil {
 		return out, err
 	}
@@ -342,4 +311,56 @@ func (s *Store) Read(ctx context.Context, q Query) (Response, error) {
 	}
 
 	return out, tx.Commit(ctx)
+}
+
+// readShardPage reads a snapshot from a serving copy. Source progress belongs
+// to a separate metadata shard and is read once by Cluster.Read.
+func (s *Store) readShardPage(ctx context.Context, q Query, cursor pageCursor) ([]HazardEvent, error) {
+	tx, err := s.begin(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	data, err := readEventPage(ctx, tx, q, cursor)
+	if err != nil {
+		return nil, err
+	}
+
+	return data, tx.Commit(ctx)
+}
+
+func readEventPage(ctx context.Context, tx pgx.Tx, q Query, cursor pageCursor) ([]HazardEvent, error) {
+	timeColumn, order, comparison := "occurred_at", "occurred_at DESC, hazard_id", "(occurred_at < $6 OR (occurred_at = $6 AND hazard_id > $7))"
+	if q.Audit {
+		timeColumn, order, comparison = "ingested_at", "ingested_at ASC, hazard_id", "(ingested_at > $6 OR (ingested_at = $6 AND hazard_id > $7))"
+	}
+
+	var after *time.Time
+	if q.Cursor != "" {
+		after = &cursor.Time
+	}
+
+	rows, err := tx.Query(ctx, `SELECT `+columns+` FROM hazard_events
+ WHERE ($1 = '' OR source = $1) AND ($2 = '' OR hazard_type = $2)
+ AND ($3 = '' OR severity = $3) AND ($4::timestamptz IS NULL OR `+timeColumn+` >= $4)
+ AND ($6::timestamptz IS NULL OR `+comparison+`)
+ ORDER BY `+order+` LIMIT $5`, q.Source, q.HazardType, q.Severity, q.Since, q.Limit+1, after, cursor.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	data := []HazardEvent{}
+
+	for rows.Next() {
+		h, err := scanEvent(rows)
+		if err != nil {
+			return data, err
+		}
+
+		data = append(data, h)
+	}
+
+	return data, rows.Err()
 }
