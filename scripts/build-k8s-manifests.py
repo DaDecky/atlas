@@ -65,7 +65,14 @@ def workload(name, role, port, sizes, *, stateful=False, health="/health", owner
     if name == "aggregator":
         pod["serviceAccountName"] = "aggregator-data"
         pod["terminationGracePeriodSeconds"] = 30
-        pod["topologySpreadConstraints"] = [{"maxSkew": 1, "topologyKey": "kubernetes.io/hostname", "whenUnsatisfiable": "ScheduleAnyway", "labelSelector": {"matchLabels": {"app": "aggregator"}}}]
+        # Count this revision during a rollout, so outgoing pods do not push the new replicas onto one worker.
+        aggregator_selector = {"matchLabels": {"app": "aggregator"}}
+        revision_keys = ["pod-template-hash"]
+        pod["topologySpreadConstraints"] = [{"maxSkew": 1, "topologyKey": "kubernetes.io/hostname", "whenUnsatisfiable": "ScheduleAnyway", "labelSelector": aggregator_selector, "matchLabelKeys": revision_keys}]
+        pod["affinity"] = {"podAntiAffinity": {"preferredDuringSchedulingIgnoredDuringExecution": [{
+            "weight": 100,
+            "podAffinityTerm": {"topologyKey": "kubernetes.io/hostname", "labelSelector": aggregator_selector, "matchLabelKeys": revision_keys},
+        }]}}
         pod["volumes"] = [{"name": "schema-policy", "configMap": {"name": "source-schema-policy"}}]
         container["volumeMounts"] = [{"name": "schema-policy", "mountPath": "/etc/atlas/schema", "readOnly": True}]
         container["lifecycle"] = {"preStop": {"exec": {"command": ["sh", "-c", "sleep 5"]}}}
