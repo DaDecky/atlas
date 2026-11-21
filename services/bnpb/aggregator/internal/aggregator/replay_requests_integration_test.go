@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -17,7 +19,7 @@ import (
 func TestIntegrationReplayRequestSurvivesHolderReplacement(t *testing.T) {
 	url := os.Getenv("TEST_RABBITMQ_URL")
 	if url == "" {
-		t.Skip("run make integration")
+		t.Fatal("run make integration")
 	}
 
 	store := integrationStore(t)
@@ -46,7 +48,7 @@ func TestIntegrationReplayRequestSurvivesHolderReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	api := (&OpsAPI{Token: "replay-token", Parking: store, Requests: &queue}).Handler()
+	api := (&OpsAPI{Token: "replay-token", Parking: store, Requests: &queue, Capacity: defaultOpsCapacity}).Handler()
 	req := httptest.NewRequest(http.MethodPost, "/internal/ops/replay", strings.NewReader(`{"source":"PVMBG","reason_code":"schema_violation","limit":1}`))
 	req.Header.Set("Authorization", "Bearer replay-token")
 

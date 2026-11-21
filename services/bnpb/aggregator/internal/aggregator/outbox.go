@@ -109,7 +109,7 @@ func (s *Store) relayOne(ctx context.Context, p EventPublisher, criticalOnly boo
 	if publishErr != nil {
 		// The broker may have exhausted the caller's deadline. Persist the failed
 		// attempt under a separate bounded context so timeouts cannot poison the head.
-		record, cancel := context.WithTimeout(context.WithoutCancel(ctx), shardDeadline)
+		record, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultShardDeadline)
 		defer cancel()
 
 		attempts++
@@ -146,14 +146,7 @@ func (s *Store) relayOne(ctx context.Context, p EventPublisher, criticalOnly boo
 
 func publishEvent(ctx context.Context, p EventPublisher, item Publication, critical bool) error {
 	if critical {
-		publisher, ok := p.(interface {
-			PublishCritical(context.Context, Publication) error
-		})
-		if !ok {
-			return errors.New("publisher has no critical lane")
-		}
-
-		if err := publisher.PublishCritical(ctx, item); err != nil {
+		if err := p.PublishCritical(ctx, item); err != nil {
 			return err
 		}
 	}
@@ -167,12 +160,12 @@ func publicationMessageID(id string, revision int64) string {
 
 func parkPublication(ctx context.Context, tx pgx.Tx, id, source string, raw []byte, correlation string, attempts int, created time.Time, failure error, retryable bool) error {
 	sum := sha256.Sum256(raw)
-	status := "parked"
+	status := parkingParked
 
 	var next *time.Time
 
 	if retryable {
-		status = "retrying"
+		status = parkingRetrying
 		value := time.Now().UTC().Add(publicationRetryDelay)
 		next = &value
 	}

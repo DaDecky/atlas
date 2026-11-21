@@ -17,6 +17,9 @@ type RabbitReports struct {
 
 const FieldReportsQueue = "field.reports"
 
+// fieldReportsArgs must match the Aggregator's declaration, or RabbitMQ refuses the second one.
+var fieldReportsArgs = amqp.Table{"x-max-length": int32(10000), "x-max-length-bytes": int32(64 << 20), "x-overflow": "reject-publish"}
+
 // Each bounded call owns its AMQP channel. Concurrent HTTP requests never share
 // confirms or socket deadlines, and no downstream consumer is required for 202.
 func (p *RabbitReports) PublishReport(ctx context.Context, report FieldReport, id string) error {
@@ -56,8 +59,7 @@ func (p *RabbitReports) PublishReport(ctx context.Context, report FieldReport, i
 		return errors.New("report channel unavailable")
 	}
 
-	args := amqp.Table{"x-max-length": int32(10000), "x-max-length-bytes": int32(64 << 20), "x-overflow": "reject-publish"}
-	if _, err = ch.QueueDeclare(FieldReportsQueue, true, false, false, false, args); err != nil {
+	if _, err = ch.QueueDeclare(FieldReportsQueue, true, false, false, false, fieldReportsArgs); err != nil {
 		return errors.New("report queue unavailable")
 	}
 

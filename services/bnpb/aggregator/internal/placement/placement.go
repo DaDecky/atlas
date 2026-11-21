@@ -9,9 +9,12 @@ import (
 	"sort"
 )
 
+// State is the role of one copy of a shard. Only Transition changes it.
+type State string
+
 type Copy struct {
 	Node    string `json:"node"`
-	State   string `json:"state"`
+	State   State  `json:"state"`
 	StoreID string `json:"store_id,omitempty"`
 }
 
@@ -21,6 +24,12 @@ type Table struct {
 	Shards       map[string][]Copy `json:"shards"`
 	WriterEpochs map[string]int64  `json:"writer_epochs"`
 }
+
+const (
+	Serving   State = "serving"
+	Behind    State = "behind"
+	Refilling State = "refilling"
+)
 
 const Shards = 48
 
@@ -48,7 +57,7 @@ func New(nodes []string) (Table, error) {
 
 		ranked := append([]string(nil), t.Nodes...)
 		sort.Slice(ranked, func(i, j int) bool { return score(shard, ranked[i]) > score(shard, ranked[j]) })
-		t.Shards[shard] = []Copy{{Node: ranked[0], State: "serving"}, {Node: ranked[1], State: "serving"}}
+		t.Shards[shard] = []Copy{{Node: ranked[0], State: Serving}, {Node: ranked[1], State: Serving}}
 	}
 
 	return t, nil
@@ -86,11 +95,44 @@ func (t Table) Validate() error {
 		}
 
 		for _, c := range copies {
-			if !nodes[c.Node] || (c.State != "serving" && c.State != "behind" && c.State != "refilling") {
+			if !nodes[c.Node] || (c.State != Serving && c.State != Behind && c.State != Refilling) {
 				return errors.New("invalid copy")
 			}
 		}
 	}
 
 	return nil
+}
+
+// Transition moves the copy of shard on node to the given state. Any copy may fall behind,
+// only a copy that is behind may refill, and only a refilled copy may serve.
+func (t *Table) Transition(shard, node string, to State) error {
+	for i, holder := range t.Shards[shard] {
+		if holder.Node != node {
+			continue
+		}
+
+		if !allowed(holder.State, to) {
+			return fmt.Errorf("copy on %s of %s cannot move from %s to %s", node, shard, holder.State, to)
+		}
+
+		t.Shards[shard][i].State = to
+
+		return nil
+	}
+
+	return fmt.Errorf("%s holds no copy of %s", node, shard)
+}
+
+func allowed(from, to State) bool {
+	switch to {
+	case Behind:
+		return true
+	case Refilling:
+		return from == Behind || from == Refilling
+	case Serving:
+		return from == Refilling
+	}
+
+	return false
 }

@@ -7,6 +7,7 @@ require (
 	github.com/go-logr/logr v1.4.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/rabbitmq/amqp091-go v1.14.0
+	github.com/sony/gobreaker/v2 v2.4.0
 	k8s.io/api v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2

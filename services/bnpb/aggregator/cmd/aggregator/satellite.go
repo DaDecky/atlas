@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"atlas/services/bnpb/aggregator/internal/aggregator"
+	"atlas/services/bnpb/aggregator/internal/leadership"
 	"atlas/services/bnpb/aggregator/internal/satellite"
 )
 
-func satelliteWork(store runtimeData, log *slog.Logger) (sourceWork, error) {
+func satelliteWork(store runtimeData, log *slog.Logger) (leadership.Work, error) {
 	token := os.Getenv("SATELLITE_TOKEN")
 	if path := os.Getenv("SATELLITE_TOKEN_FILE"); path != "" {
 		raw, err := os.ReadFile(path)
@@ -47,7 +48,7 @@ func satelliteWork(store runtimeData, log *slog.Logger) (sourceWork, error) {
 		origin = "https://satellite.naufarrel.dev"
 	}
 
-	return func(ctx context.Context, epoch int64, termGuard sourceGuard) {
+	return func(ctx context.Context, epoch int64, termGuard leadership.Guard) {
 		sink := &aggregator.SatelliteSink{Data: store, Epoch: epoch, Reference: ref}
 		guard := func(ctx context.Context) error {
 			if termGuard != nil {

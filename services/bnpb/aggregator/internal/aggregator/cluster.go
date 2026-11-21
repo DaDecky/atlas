@@ -26,12 +26,19 @@ type DataNode struct {
 type Cluster struct {
 	Nodes     map[string]*DataNode
 	Placement placement.Repository
-	Deadline  time.Duration
+	Limits    ClusterLimits
+}
+
+// ClusterLimits bound each copy call and the pools of each data node.
+type ClusterLimits struct {
+	ShardDeadline, HedgeDelay time.Duration
+	ReadWorkers               int
+	IngestPool, QueryPool     int32
 }
 
 var _ ShardStore = (*Cluster)(nil)
 
-func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
+func OpenDataNode(ctx context.Context, name, url string, limits ClusterLimits) (*DataNode, error) {
 	// A fresh Kubernetes rollout can initialize the same node concurrently.
 	// CREATE TABLE IF NOT EXISTS alone does not serialize PostgreSQL catalogue
 	// inserts. Hold a node-local bootstrap lock across the base and shard DDL.
@@ -51,7 +58,7 @@ func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
 		return nil, err
 	}
 
-	s, err := OpenStore(ctx, url, 4, 8, defaultDBConnectTimeout)
+	s, err := OpenStore(ctx, url, limits.IngestPool, limits.QueryPool, defaultDBConnectTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -81,12 +88,7 @@ func OpenDataNode(ctx context.Context, name, url string) (*DataNode, error) {
 }
 
 func (c *Cluster) timeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	d := c.Deadline
-	if d <= 0 {
-		d = shardDeadline
-	}
-
-	return context.WithTimeout(ctx, d)
+	return context.WithTimeout(ctx, c.Limits.ShardDeadline)
 }
 
 func (c *Cluster) Health(ctx context.Context) error {
@@ -167,7 +169,7 @@ func (c *Cluster) AcquireWriterEpoch(ctx context.Context, source string) (int64,
 }
 
 func (c *Cluster) seal(ctx context.Context, source string, epoch int64, strict bool) error {
-	table, v, err := c.Placement.Load(ctx)
+	table, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return err
 	}
@@ -198,63 +200,66 @@ func (c *Cluster) seal(ctx context.Context, source string, epoch int64, strict b
 	if count < len(table.Nodes)/2+1 {
 		return errors.New("seal majority unavailable")
 	}
-	// An unsealed holder must not serve a stale writer's data after takeover.
-	for shard, copies := range table.Shards {
-		for i, copy := range copies {
-			if !sealed[copy.Node] {
-				table.Shards[shard][i].State = "behind"
+
+	return placement.Update(ctx, c.Placement, func(t *placement.Table) (bool, error) {
+		if epoch < t.WriterEpochs[source] || strict && epoch == t.WriterEpochs[source] {
+			return false, ErrStaleEpoch
+		}
+		// An unsealed holder must not serve a stale writer's data after takeover.
+		for shard, copies := range t.Shards {
+			for _, holder := range copies {
+				if sealed[holder.Node] {
+					continue
+				}
+
+				if err := t.Transition(shard, holder.Node, placement.Behind); err != nil {
+					return false, err
+				}
 			}
 		}
-	}
 
-	table.WriterEpochs[source] = epoch
-	table.Generation++
+		t.WriterEpochs[source] = epoch
 
-	return c.Placement.CompareAndSwap(ctx, v, table)
+		return true, nil
+	})
 }
 
+// MarkBehind fences one copy out of reads. Only the writer epoch and the incarnation of that
+// copy must still hold, so a change to another shard does not refuse the mark.
 func (c *Cluster) MarkBehind(ctx context.Context, r BehindRequest) error {
-	table, v, err := c.Placement.Load(ctx)
-	if err != nil {
-		return err
-	}
-
-	if table.Generation != r.Generation {
-		return placement.ErrConflict
-	}
-
-	if table.WriterEpochs[r.Source] != r.Epoch {
-		return ErrStaleEpoch
-	}
-
-	copies, ok := table.Shards[r.Shard]
-	if !ok {
-		return errors.New("unknown shard")
-	}
-
-	found, serving := false, false
-
-	for i := range copies {
-		if copies[i].Node == r.Copy {
-			copies[i].State = "behind"
-			found = true
-		} else if copies[i].State == "serving" {
-			serving = true
+	return placement.Update(ctx, c.Placement, func(t *placement.Table) (bool, error) {
+		if t.WriterEpochs[r.Source] != r.Epoch {
+			return false, ErrStaleEpoch
 		}
-	}
 
-	if !found {
-		return errors.New("unknown copy")
-	}
+		found, serving := false, false
 
-	if !serving {
-		return errors.New("mark behind requires another serving copy")
-	}
+		for _, holder := range t.Shards[r.Shard] {
+			if holder.Node == r.Copy {
+				found = holder.StoreID == r.StoreID
+			} else if holder.State == placement.Serving {
+				serving = true
+			}
+		}
 
-	table.Shards[r.Shard] = copies
-	table.Generation++
+		if !found {
+			return false, fmt.Errorf("copy %s of %s was replaced: %w", r.Copy, r.Shard, placement.ErrConflict)
+		}
 
-	return c.Placement.CompareAndSwap(ctx, v, table)
+		if !serving {
+			return false, errors.New("mark behind requires another serving copy")
+		}
+
+		return true, t.Transition(r.Shard, r.Copy, placement.Behind)
+	})
+}
+
+// swapPlacement swaps in t only if the table is still at version. A step whose preconditions
+// came from an earlier read uses it, since a retry would apply them to a table they no longer fit.
+func (c *Cluster) swapPlacement(ctx context.Context, version string, t placement.Table) error {
+	t.Generation++
+
+	return c.Placement.CompareAndSwap(ctx, version, t)
 }
 
 func (c *Cluster) Upsert(ctx context.Context, b WriteBatch) ([]HazardEvent, error) {
@@ -270,19 +275,8 @@ func (c *Cluster) CommitState(ctx context.Context, b WriteBatch, s StreamState) 
 }
 
 func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time, state *StreamState) ([]HazardEvent, error) {
-	if err := validateBatch(b); err != nil {
+	if err := checkWrite(b, checkpoint, state); err != nil {
 		return nil, err
-	}
-
-	if checkpoint != nil && checkpoint.IsZero() {
-		return nil, errors.New("checkpoint required")
-	}
-
-	if state != nil {
-		var object map[string]json.RawMessage
-		if state.Offset < 0 || json.Unmarshal(state.Payload, &object) != nil || object == nil {
-			return nil, errors.New("invalid stream state")
-		}
 	}
 
 	if !b.sourceLocked {
@@ -318,21 +312,8 @@ func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time
 	}
 	// Events commit idempotently before progress; an interrupted distributed batch
 	// resumes from prior state. It is not a distributed SQL transaction.
-	groups := map[string][]HazardEvent{}
-
-	for _, e := range b.Events {
-		key := placement.Shard(e.HazardID)
-		groups[key] = append(groups[key], e)
-	}
-
+	groups, keys := shardGroups(b.Events)
 	changed := map[string]HazardEvent{}
-
-	keys := make([]string, 0, len(groups))
-	for key := range groups {
-		keys = append(keys, key)
-	}
-
-	sort.Strings(keys)
 
 	for _, shard := range keys {
 		part := b
@@ -408,7 +389,8 @@ func (c *Cluster) LoadState(ctx context.Context, source string) (StreamState, er
 	return *state, nil
 }
 
-func (c *Cluster) fanout(ctx context.Context, read func(context.Context, *Store) ([]HazardEvent, error)) ([]HazardEvent, []string, error) {
+// fanout reads every shard from one serving copy and names the shards it could not read.
+func fanout[T any](ctx context.Context, c *Cluster, read func(context.Context, *Store) ([]T, error)) ([]T, []string, error) {
 	t, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -419,9 +401,9 @@ func (c *Cluster) fanout(ctx context.Context, read func(context.Context, *Store)
 		wg sync.WaitGroup
 	)
 
-	events := []HazardEvent{}
+	events := []T{}
 	unavailable := []string{}
-	sem := make(chan struct{}, shardReadWorkers)
+	sem := make(chan struct{}, c.Limits.ReadWorkers)
 
 	for shard, copies := range t.Shards {
 		wg.Go(func() {
@@ -474,7 +456,7 @@ func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
 
 	var mu sync.Mutex
 
-	rows, missing, err := c.fanout(ctx, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
+	rows, missing, err := fanout(ctx, c, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
 		r, err := s.Read(ctx, q)
 		if r.NextCursor != nil {
 			mu.Lock()
@@ -514,11 +496,9 @@ func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
 			defer tx.Rollback(call)
 
 			err = tx.QueryRow(call, `SELECT last_success_at,stale_since FROM source_progress WHERE source=$1`, source).Scan(&fresh.LastSuccessAt, &fresh.StaleSince)
-			if err == nil && fresh.LastSuccessAt != nil {
-				fresh.Status = "healthy"
-				if fresh.StaleSince != nil {
-					fresh.Status = "stale"
-				}
+			if err == nil {
+				// The events sit in 48 shards, so a source that never succeeded counts as having none.
+				fresh.Status = deriveFreshness(fresh.LastSuccessAt, fresh.StaleSince, fresh.LastSuccessAt != nil)
 			}
 
 			return fresh, err
@@ -562,14 +542,14 @@ func (c *Cluster) lockSource(ctx context.Context, source string) (func(), error)
 		return nil, err
 	}
 
-	for _, copy := range t.Shards[placement.Shard("metadata:"+source)] {
-		if copy.State != "serving" || c.Nodes[copy.Node] == nil {
+	for _, holder := range t.Shards[placement.Shard("metadata:"+source)] {
+		if holder.State != placement.Serving || c.Nodes[holder.Node] == nil {
 			continue
 		}
 
 		call, cancel := c.timeout(ctx)
 
-		tx, err := c.Nodes[copy.Node].Store.coordination.Begin(call)
+		tx, err := c.Nodes[holder.Node].Store.coordination.Begin(call)
 		if err == nil {
 			_, err = tx.Exec(call, `SELECT pg_advisory_xact_lock(419032,hashtext($1))`, source)
 		}
@@ -593,4 +573,43 @@ func (c *Cluster) lockSource(ctx context.Context, source string) (func(), error)
 	}
 
 	return nil, errors.New("source coordination unavailable")
+}
+
+func checkWrite(b WriteBatch, checkpoint *time.Time, state *StreamState) error {
+	if err := validateBatch(b); err != nil {
+		return err
+	}
+
+	if checkpoint != nil && checkpoint.IsZero() {
+		return errors.New("checkpoint required")
+	}
+
+	if state != nil {
+		var object map[string]json.RawMessage
+		if state.Offset < 0 || json.Unmarshal(state.Payload, &object) != nil || object == nil {
+			return errors.New("invalid stream state")
+		}
+	}
+
+	return nil
+}
+
+// shardGroups splits events by shard and returns the shards in a fixed order, so
+// concurrent writers lock copies in the same order.
+func shardGroups(events []HazardEvent) (map[string][]HazardEvent, []string) {
+	groups := map[string][]HazardEvent{}
+
+	for _, e := range events {
+		key := placement.Shard(e.HazardID)
+		groups[key] = append(groups[key], e)
+	}
+
+	keys := make([]string, 0, len(groups))
+	for key := range groups {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	return groups, keys
 }

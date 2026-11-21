@@ -25,7 +25,7 @@ x-mock: &mock
 
 services:
   postgres:
-    image: postgres:18.3-alpine
+    image: postgres:18.3-alpine@sha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7
     environment:
       POSTGRES_USER: atlas_admin
       POSTGRES_DB: postgres
@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
 
   rabbitmq:
-    image: rabbitmq:4.2.5-alpine
+    image: rabbitmq:4.2.5-alpine@sha256:d4a3806070111cc69130a6542aa4049b612789852ef11fc3862abc94631b2572
     environment:
       RABBITMQ_DEFAULT_USER: atlas
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?run make env}
@@ -59,7 +59,7 @@ services:
 
   # Each agency owns its database on a network only that agency can reach.
   bmkg-db:
-    image: postgres:18.3-alpine
+    image: postgres:18.3-alpine@sha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7
     environment:
       POSTGRES_USER: bmkg
       POSTGRES_DB: bmkg
@@ -89,8 +89,19 @@ services:
       bmkg-db: {condition: service_healthy}
     restart: unless-stopped
 
+  # The practice profile of the vendored manifest. The image is pinned and unmodified.
+  sensor-pantai:
+    image: sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d
+    environment:
+      PANTAI_PROFILE: practice
+      PANTAI_SEED: '42'
+      PANTAI_SPEED: '60'
+      PANTAI_AUTH_TOKEN: ${PANTAI_AUTH_TOKEN:?run make env}
+    networks: [sources]
+    restart: unless-stopped
+
   pvmbg-db:
-    image: postgres:18.3-alpine
+    image: postgres:18.3-alpine@sha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7
     environment:
       POSTGRES_USER: pvmbg
       POSTGRES_DB: pvmbg
@@ -139,6 +150,7 @@ services:
       RETRY_BACKOFF: ${RETRY_BACKOFF:-}
       QUERY_TIMEOUT: ${QUERY_TIMEOUT:-}
       QUERY_CAPACITY: ${QUERY_CAPACITY:-}
+      FIELD_TEAM_RESERVED_PERCENT: ${FIELD_TEAM_RESERVED_PERCENT:-}
       QUERY_POOL_SIZE: ${QUERY_POOL_SIZE:-}
       INGEST_POOL_SIZE: ${INGEST_POOL_SIZE:-}
       PUBLISH_TIMEOUT: ${PUBLISH_TIMEOUT:-}
@@ -147,6 +159,13 @@ services:
       WARNING_LOOKBACK: ${WARNING_LOOKBACK:-}
       MAX_SOURCE_RECORDS: ${MAX_SOURCE_RECORDS:-}
       MAX_SOURCE_BYTES: ${MAX_SOURCE_BYTES:-}
+      SENSOR_PANTAI_URL: http://sensor-pantai:8080
+      PANTAI_AUTH_TOKEN: ${PANTAI_AUTH_TOKEN:?run make env}
+      SENSOR_POLL_INTERVAL: ${SENSOR_POLL_INTERVAL:-}
+      SENSOR_TIMEOUT: ${SENSOR_TIMEOUT:-}
+      SENSOR_STALE_AFTER: ${SENSOR_STALE_AFTER:-}
+      AUDIT_TIMEOUT: ${AUDIT_TIMEOUT:-}
+      OPS_CAPACITY: ${OPS_CAPACITY:-}
       <<: [*http, *db, *broker]
       SOURCE_SCHEMA_POLICY_FILE: /etc/atlas/schema/policy.json
     configs:
@@ -191,6 +210,7 @@ services:
       RABBITMQ_URL: amqp://atlas:${RABBITMQ_PASSWORD}@rabbitmq:5672/
       CLIENT_API_OUTBOUND_TIMEOUT: ${CLIENT_API_OUTBOUND_TIMEOUT:-}
       CLIENT_API_REQUEST_CAPACITY: ${CLIENT_API_REQUEST_CAPACITY:-}
+      FIELD_TEAM_RESERVED_PERCENT: ${FIELD_TEAM_RESERVED_PERCENT:-}
       MAX_RETRY_AFTER: ${MAX_RETRY_AFTER:-}
       AGGREGATOR_MAX_RESPONSE_BYTES: ${AGGREGATOR_MAX_RESPONSE_BYTES:-}
       AUTH_VALIDATE_MAX_BYTES: ${AUTH_VALIDATE_MAX_BYTES:-}
@@ -227,6 +247,18 @@ services:
       CONSUMER_MESSAGE_TTL: ${CONSUMER_MESSAGE_TTL:-}
       <<: [*http, *broker]
     volumes: [consumer-b-data:/data]
+    networks: [events]
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+    restart: unless-stopped
+
+  notifier:
+    build: ./consumers/notifier
+    environment:
+      AMQP_URL: amqp://atlas:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      CONSUMER_PREFETCH: ${CONSUMER_PREFETCH:-}
+      <<: [*http, *broker]
+    volumes: [notifier-data:/data]
     networks: [events]
     depends_on:
       rabbitmq: {condition: service_healthy}
@@ -278,3 +310,4 @@ volumes:
   consumer-a-data:
   consumer-b-data:
   consumer-c-data:
+  notifier-data:

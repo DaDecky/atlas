@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -226,7 +228,7 @@ func TestDataIntegrationFieldReportsDuringHolderReplacement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	node, err := OpenDataNode(ctx, "d", os.Getenv("DATA_TEST_D"))
+	node, err := OpenDataNode(ctx, "d", os.Getenv("DATA_TEST_D"), DefaultClusterLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

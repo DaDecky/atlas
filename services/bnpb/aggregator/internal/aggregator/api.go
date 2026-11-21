@@ -20,14 +20,16 @@ import (
 type ReadStore interface {
 	Read(context.Context, Query) (Response, error)
 	Health(context.Context) error
+	// AnalyticsCounts counts events in the stores and names the units it could not read.
+	AnalyticsCounts(ctx context.Context, since, until *time.Time) ([]AnalyticsCount, []string, error)
 }
 
 type API struct {
-	Store    ReadStore
-	Token    string
-	Timeout  time.Duration
-	Capacity chan struct{}
-	Log      *slog.Logger
+	Store     ReadStore
+	Token     string
+	Timeout   time.Duration
+	Admission *Admission
+	Log       *slog.Logger
 }
 
 type statusWriter struct {
@@ -91,13 +93,13 @@ func parseQuery(r *http.Request) (Query, error) {
 
 			q.Source = v
 		case "hazard_type":
-			if v != "SEISMIC" && v != "VOLCANIC" && v != "WILDFIRE" && v != "COASTAL" {
+			if !validHazardType(v) {
 				return q, errors.New("hazard type")
 			}
 
 			q.HazardType = v
 		case "severity":
-			if v != "NORMAL" && v != "WASPADA" && v != "SIAGA" && v != "AWAS" {
+			if !severities[v] {
 				return q, errors.New("severity")
 			}
 
@@ -174,15 +176,14 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	select {
-	case a.Capacity <- struct{}{}:
-		defer func() { <-a.Capacity }()
-	default:
+	// The Client API forwards the class it derived from the verified token.
+	if !a.Admission.acquire(r.Header.Get("X-Request-Class") == "media") {
 		w.Header().Set("Retry-After", "1")
 		writeError(w, http.StatusTooManyRequests, "capacity_exceeded")
 
 		return
 	}
+	defer a.Admission.release()
 
 	ctx, cancel := context.WithTimeout(r.Context(), a.Timeout)
 	defer cancel()

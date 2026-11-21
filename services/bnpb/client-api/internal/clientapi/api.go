@@ -19,12 +19,12 @@ import (
 )
 
 type API struct {
-	Config       Config
-	Client       *http.Client
-	Log          *slog.Logger
-	Reports      ReportPublisher
-	capacity     chan struct{}
-	capacityOnce sync.Once
+	Config        Config
+	Client        *http.Client
+	Log           *slog.Logger
+	Reports       ReportPublisher
+	admission     *admission
+	admissionOnce sync.Once
 }
 
 type validateRequest struct {
@@ -41,6 +41,8 @@ var summaryFields = map[string]bool{
 	"hazard_id": true, "source": true, "hazard_type": true, "severity": true,
 	"area_name": true, "occurred_at": true, "ingested_at": true,
 }
+
+var sourceTypes = map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -89,71 +91,82 @@ func allowedFilters(raw string) (url.Values, string, error) {
 	out := url.Values{}
 	view := "summary"
 
-	allowed := map[string]bool{
-		"source":      true,
-		"hazard_type": true,
-		"severity":    true,
-		"since":       true,
-		"limit":       true,
-		"view":        true,
-		"cursor":      true,
-	}
 	for key, values := range parsed {
-		if !allowed[key] || len(values) != 1 {
+		if len(values) != 1 {
 			return nil, "", errors.New("invalid filter")
 		}
 
-		value := values[0]
-
-		switch key {
-		case "source":
-			if !validSource(value) {
-				return nil, "", errors.New("invalid source")
-			}
-		case "hazard_type":
-			if value != "SEISMIC" && value != "VOLCANIC" && value != "WILDFIRE" && value != "COASTAL" {
-				return nil, "", errors.New("invalid hazard type")
-			}
-		case "severity":
-			if value != "NORMAL" && value != "WASPADA" && value != "SIAGA" && value != "AWAS" {
-				return nil, "", errors.New("invalid severity")
-			}
-		case "since":
-			if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
-				return nil, "", errors.New("invalid since")
-			}
-		case "limit":
-			n, err := strconv.Atoi(value)
-			if err != nil || n < 1 || n > 500 {
-				return nil, "", errors.New("invalid limit")
-			}
-		case "view":
-			if value != "summary" && value != "raw" {
+		if key == "view" {
+			if values[0] != "summary" && values[0] != "raw" {
 				return nil, "", errors.New("invalid view")
 			}
 
-			view = value
+			view = values[0]
 
 			continue
-		case "cursor":
-			if len(value) > 4096 {
-				return nil, "", errors.New("invalid cursor")
-			}
 		}
 
-		out.Set(key, value)
+		if err = checkFilter(key, values[0]); err != nil {
+			return nil, "", err
+		}
+
+		out.Set(key, values[0])
 	}
 
-	types := map[string]string{"BMKG": "SEISMIC", "PVMBG": "VOLCANIC", "SATELIT": "WILDFIRE", "SENSOR_PANTAI": "COASTAL"}
-	if source, kind := out.Get("source"), out.Get("hazard_type"); source != "" && kind != "" && types[source] != kind {
+	if source, kind := out.Get("source"), out.Get("hazard_type"); source != "" && kind != "" && sourceTypes[source] != kind {
 		return nil, "", errors.New("contradictory filters")
 	}
 
 	return out, view, nil
 }
 
+func checkFilter(key, value string) error {
+	switch key {
+	case "source":
+		if !validSource(value) {
+			return errors.New("invalid source")
+		}
+	case "hazard_type":
+		if !validHazardType(value) {
+			return errors.New("invalid hazard type")
+		}
+	case "severity":
+		if value != "NORMAL" && value != "WASPADA" && value != "SIAGA" && value != "AWAS" {
+			return errors.New("invalid severity")
+		}
+	case "since":
+		if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
+			return errors.New("invalid since")
+		}
+	case "limit":
+		if n, err := strconv.Atoi(value); err != nil || n < 1 || n > 500 {
+			return errors.New("invalid limit")
+		}
+	case "cursor":
+		if len(value) > 4096 {
+			return errors.New("invalid cursor")
+		}
+	default:
+		return errors.New("invalid filter")
+	}
+
+	return nil
+}
+
 func validSource(source string) bool {
-	return source == "BMKG" || source == "PVMBG" || source == "SATELIT" || source == "SENSOR_PANTAI"
+	_, ok := sourceTypes[source]
+
+	return ok
+}
+
+func validHazardType(hazardType string) bool {
+	for _, known := range sourceTypes {
+		if hazardType == known {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (a *API) outbound(
@@ -203,6 +216,21 @@ func (a *API) outbound(
 	)
 
 	return resp, err
+}
+
+// readAggregator retries a failed read once. Dropping idle connections first makes the retry
+// dial again, so the Service can route it to another instance.
+func (a *API) readAggregator(ctx context.Context, target, class, id string) (*http.Response, error) {
+	headers := map[string]string{"Authorization": "Bearer " + a.Config.AggregatorToken, "X-Request-Class": class}
+
+	resp, err := a.outbound(ctx, http.MethodGet, target, headers, nil, id, "aggregator")
+	if err == nil || ctx.Err() != nil {
+		return resp, err
+	}
+
+	a.Client.CloseIdleConnections()
+
+	return a.outbound(ctx, http.MethodGet, target, headers, nil, id, "aggregator")
 }
 
 func (a *API) validateCurrent(ctx context.Context, claims AccessClaims, id string) (int, string) {
@@ -319,6 +347,31 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 		data = filtered
 	}
 
+	freshness, err := publicFreshness(sources)
+	if err != nil {
+		return nil, err
+	}
+
+	out := map[string]any{"data": data, "sources": freshness}
+
+	for _, key := range []string{"partial", "unavailable_units", "next_cursor"} {
+		raw, exists := envelope[key]
+		if !exists {
+			continue
+		}
+
+		if err = checkPageMarker(key, raw); err != nil {
+			return nil, err
+		}
+
+		out[key] = raw
+	}
+
+	return json.Marshal(out)
+}
+
+// publicFreshness keeps the source, status, and freshness times of each entry and drops the rest.
+func publicFreshness(sources json.RawMessage) ([]map[string]json.RawMessage, error) {
 	var freshness []map[string]json.RawMessage
 	if err := json.Unmarshal(sources, &freshness); err != nil {
 		return nil, err
@@ -346,36 +399,29 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 		}
 	}
 
-	out := map[string]any{"data": data, "sources": freshness}
+	return freshness, nil
+}
 
-	for _, key := range []string{"partial", "unavailable_units", "next_cursor"} {
-		raw, exists := envelope[key]
-		if !exists {
-			continue
+func checkPageMarker(key string, raw json.RawMessage) error {
+	switch key {
+	case "partial":
+		var value bool
+		if string(raw) == "null" || json.Unmarshal(raw, &value) != nil {
+			return errors.New("invalid partial marker")
 		}
-
-		switch key {
-		case "partial":
-			var value bool
-			if string(raw) == "null" || json.Unmarshal(raw, &value) != nil {
-				return nil, errors.New("invalid partial marker")
-			}
-		case "unavailable_units":
-			var value []string
-			if json.Unmarshal(raw, &value) != nil || len(value) > 128 {
-				return nil, errors.New("invalid unavailable units")
-			}
-		case "next_cursor":
-			var value *string
-			if json.Unmarshal(raw, &value) != nil || value != nil && len(*value) > 4096 {
-				return nil, errors.New("invalid next cursor")
-			}
+	case "unavailable_units":
+		var value []string
+		if json.Unmarshal(raw, &value) != nil || len(value) > 128 {
+			return errors.New("invalid unavailable units")
 		}
-
-		out[key] = raw
+	case "next_cursor":
+		var value *string
+		if json.Unmarshal(raw, &value) != nil || value != nil && len(*value) > 4096 {
+			return errors.New("invalid next cursor")
+		}
 	}
 
-	return json.Marshal(out)
+	return nil
 }
 
 func retryAfter(raw string, max time.Duration) string {
@@ -392,27 +438,15 @@ func retryAfter(raw string, max time.Duration) string {
 }
 
 func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
-	select {
-	case a.capacity <- struct{}{}:
-		defer func() { <-a.capacity }()
-	default:
-		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusTooManyRequests, "capacity_exceeded")
-
-		return
-	}
-
-	jwt, ok := bearerValue(r.Header.Get("Authorization"))
+	claims, ok := a.verifyRequest(w, r)
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
-	claims, err := verifyAccessToken(jwt, a.Config.PublicKey, a.Config.Issuer, a.Config.Audience, time.Now())
-	if err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid_token")
+	if !a.admit(w, claims) {
 		return
 	}
+	defer a.admission.release()
 
 	status, code := a.validateCurrent(r.Context(), claims, r.Header.Get("X-Correlation-ID"))
 	if status != http.StatusOK {
@@ -436,15 +470,18 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 		target += "?" + encoded
 	}
 
-	resp, err := a.outbound(r.Context(), http.MethodGet, target, map[string]string{
-		"Authorization": "Bearer " + a.Config.AggregatorToken,
-	}, nil, r.Header.Get("X-Correlation-ID"), "aggregator")
+	resp, err := a.readAggregator(r.Context(), target, requestClass(claims), r.Header.Get("X-Correlation-ID"))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "aggregator_unavailable")
 		return
 	}
 	defer resp.Body.Close()
 
+	a.relayHazards(w, resp, view)
+}
+
+// relayHazards turns an Aggregator answer into the public answer.
+func (a *API) relayHazards(w http.ResponseWriter, resp *http.Response, view string) {
 	if resp.StatusCode == http.StatusTooManyRequests {
 		w.Header().Set("Retry-After", retryAfter(resp.Header.Get("Retry-After"), a.Config.MaxRetryAfter))
 		writeError(w, http.StatusTooManyRequests, "capacity_exceeded")
@@ -483,9 +520,9 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// The capacity is shared across Handler calls, so tests that build several handlers see one limit.
+// The admission is shared across Handler calls, so tests that build several handlers see one limit.
 func (a *API) Handler() http.Handler {
-	a.capacityOnce.Do(func() { a.capacity = make(chan struct{}, a.Config.RequestCapacity) })
+	a.admissionOnce.Do(func() { a.admission = newAdmission(a.Config.RequestCapacity, a.Config.FieldReservedPercent) })
 
 	mux := chi.NewRouter()
 	mux.Use(a.logRequest)

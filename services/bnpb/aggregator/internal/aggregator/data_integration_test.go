@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -179,7 +181,7 @@ func TestIntegrationDataAuditPaginationAnalyticsOutboxParking(t *testing.T) {
 		t.Fatal("replay order", events, err)
 	}
 	// Rendering is tested as HTTP output without starting a browser/server.
-	api := (&API{Store: s, Token: "internal", Timeout: time.Second, Capacity: make(chan struct{}, 1), Log: testLog()}).Handler()
+	api := (&API{Store: s, Token: "internal", Timeout: time.Second, Admission: NewAdmission(1, 0), Log: testLog()}).Handler()
 
 	w := request(api, "/internal/analytics", "")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "<svg") {

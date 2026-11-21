@@ -39,6 +39,10 @@ func (s *readStub) Read(ctx context.Context, q Query) (Response, error) {
 
 func (s *readStub) Health(context.Context) error { return s.err }
 
+func (s *readStub) AnalyticsCounts(context.Context, *time.Time, *time.Time) ([]AnalyticsCount, []string, error) {
+	return nil, nil, s.err
+}
+
 func request(handler http.Handler, path, token string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest("GET", path, nil)
 	if token != "" {
@@ -58,7 +62,7 @@ func TestAPIAuthenticationQueriesAndFreshness(t *testing.T) {
 		Data:    []HazardEvent{},
 		Sources: []Freshness{{Source: "BMKG", Status: "healthy"}, {Source: "PVMBG", Status: "stale"}},
 	}}
-	api := &API{Store: store, Token: "test-internal", Timeout: time.Second, Capacity: make(chan struct{}, 2), Log: testLog()}
+	api := &API{Store: store, Token: "test-internal", Timeout: time.Second, Admission: NewAdmission(2, 0), Log: testLog()}
 
 	handler := api.Handler()
 	for _, token := range []string{"", "test-bmkg", "test-pvmbg"} {
@@ -117,7 +121,7 @@ func TestAPIAuthenticationQueriesAndFreshness(t *testing.T) {
 
 func TestAPIAdmissionAndDeadline(t *testing.T) {
 	s := &readStub{wait: true, entered: make(chan struct{}, 1)}
-	a := &API{Store: s, Token: "test-internal", Timeout: 60 * time.Millisecond, Capacity: make(chan struct{}, 1), Log: testLog()}
+	a := &API{Store: s, Token: "test-internal", Timeout: 60 * time.Millisecond, Admission: NewAdmission(1, 0), Log: testLog()}
 	h := a.Handler()
 
 	done := make(chan *httptest.ResponseRecorder, 1)
@@ -138,18 +142,18 @@ func TestAPIAdmissionAndDeadline(t *testing.T) {
 		t.Fatal("query failed to cancel")
 	}
 
-	if len(a.Capacity) != 0 {
+	if a.Admission.inUse != 0 {
 		t.Fatal("admission slot leaked")
 	}
 }
 
 func TestAPIRouteMethodsAndCorrelation(t *testing.T) {
 	a := &API{
-		Store:    &readStub{},
-		Token:    "test-internal",
-		Timeout:  time.Second,
-		Capacity: make(chan struct{}, 1),
-		Log:      testLog(),
+		Store:     &readStub{},
+		Token:     "test-internal",
+		Timeout:   time.Second,
+		Admission: NewAdmission(1, 0),
+		Log:       testLog(),
 	}
 	h := a.Handler()
 
@@ -170,7 +174,7 @@ func TestAPIRouteMethodsAndCorrelation(t *testing.T) {
 }
 
 func TestUnknownRoutesAndMethodsAnswerJSON(t *testing.T) {
-	a := &API{Store: &readStub{}, Token: "test-internal", Timeout: time.Second, Capacity: make(chan struct{}, 1), Log: testLog()}
+	a := &API{Store: &readStub{}, Token: "test-internal", Timeout: time.Second, Admission: NewAdmission(1, 0), Log: testLog()}
 	h := a.Handler()
 
 	for _, tc := range []struct {

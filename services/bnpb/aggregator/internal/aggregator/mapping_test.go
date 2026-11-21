@@ -2,6 +2,7 @@ package aggregator
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -257,4 +258,27 @@ func TestInvalidOptionalValuesAndVolcano(t *testing.T) {
 			}
 		}
 	}
+}
+
+// MapWarnings maps a warning list as a source response, rejecting repeated IDs.
+func MapWarnings(records []Object) ([]Warning, error) {
+	out := make([]Warning, 0, len(records))
+	seen := map[string]bool{}
+
+	for _, o := range records {
+		id, w, err := mapWarning(o)
+		if err != nil {
+			return nil, err
+		}
+
+		if seen[id] {
+			return nil, fmt.Errorf("duplicate warning ID")
+		}
+
+		seen[id] = true
+
+		out = append(out, w)
+	}
+
+	return out, nil
 }

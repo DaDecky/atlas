@@ -7,17 +7,20 @@ import (
 	"sort"
 	"time"
 
+	"atlas/services/bnpb/aggregator/internal/leadership"
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
 
-type PlacementLease interface{ Acquire(context.Context) error }
+// PlannerLease names the lease of the placement planner. Only its holder refills and moves copies.
+const PlannerLease = "PLACEMENT"
 
 // RunRecovery is the placement planner: recover missing schemas, fence the
 // restored stores, rebuild behind copies, then restore two serving copies.
-func (c *Cluster) RunRecovery(ctx context.Context, lease PlacementLease, onError func(error)) {
+func (c *Cluster) RunRecovery(ctx context.Context, leader leadership.Leader, onError func(error)) {
 	for ctx.Err() == nil {
-		if err := lease.Acquire(ctx); err != nil {
-			if !errors.Is(err, placement.ErrLeaseHeld) {
+		term, err := leader.Lead(ctx, PlannerLease)
+		if err != nil {
+			if ctx.Err() == nil {
 				onError(err)
 			}
 
@@ -28,27 +31,22 @@ func (c *Cluster) RunRecovery(ctx context.Context, lease PlacementLease, onError
 			continue
 		}
 
-		// A renewing lease must not keep a stalled cycle alive indefinitely.
+		c.plan(ctx, term, onError)
+		term.Release()
+	}
+}
+
+// plan runs recovery cycles while the term holds, with a pause between cycles.
+func (c *Cluster) plan(ctx context.Context, term leadership.Term, onError func(error)) {
+	for ctx.Err() == nil && term.Check(ctx) == nil {
+		// A lost term must not keep a stalled cycle alive indefinitely.
 		cycle, cancel := context.WithTimeout(ctx, 2*time.Minute)
 
-		renewDone := make(chan struct{})
+		watched := make(chan struct{})
 		go func() {
-			defer close(renewDone)
+			defer close(watched)
 
-			ticker := time.NewTicker(3 * time.Second)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-cycle.Done():
-					return
-				case <-ticker.C:
-					if err := lease.Acquire(cycle); err != nil {
-						cancel()
-						return
-					}
-				}
-			}
+			watchTerm(cycle, cancel, term)
 		}()
 
 		if err := c.RecoverOnce(cycle); err != nil {
@@ -56,10 +54,28 @@ func (c *Cluster) RunRecovery(ctx context.Context, lease PlacementLease, onError
 		}
 
 		cancel()
-		<-renewDone
+		<-watched
 
 		if !pause(ctx, 2*time.Second) {
 			return
+		}
+	}
+}
+
+// watchTerm ends the cycle as soon as the term is lost.
+func watchTerm(cycle context.Context, cancel context.CancelFunc, term leadership.Term) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-cycle.Done():
+			return
+		case <-ticker.C:
+			if err := term.Check(cycle); err != nil {
+				cancel()
+				return
+			}
 		}
 	}
 }
@@ -97,7 +113,7 @@ func (c *Cluster) RecoverOnce(ctx context.Context) error {
 
 	for _, shard := range keys {
 		for _, holder := range table.Shards[shard] {
-			if holder.State == "serving" || !healthy[holder.Node] {
+			if holder.State == placement.Serving || !healthy[holder.Node] {
 				continue
 			}
 
@@ -118,7 +134,7 @@ func (c *Cluster) prepareStore(ctx context.Context, name string, missing bool) e
 	node := c.Nodes[name]
 
 	if missing {
-		for _, sql := range []string{schema, m2Schema} {
+		for _, sql := range []string{schema, schemaMigrations, publicSchema} {
 			call, cancel := c.timeout(ctx)
 			_, err := node.Store.ingest.Exec(call, sql)
 
@@ -163,19 +179,7 @@ func (c *Cluster) prepareStore(ctx context.Context, name string, missing bool) e
 // RebalanceOnce uses the current healthy configured membership. Copy moves are
 // incremental, retain a serving donor, and never stop the application globally.
 func (c *Cluster) RebalanceOnce(ctx context.Context) error {
-	names := []string{}
-
-	for name, node := range c.Nodes {
-		call, cancel := c.timeout(ctx)
-		err := node.Store.Health(call)
-
-		cancel()
-
-		if err == nil {
-			names = append(names, name)
-		}
-	}
-
+	names := c.healthyNodes(ctx)
 	if len(names) < 3 {
 		return nil
 	}
@@ -192,35 +196,11 @@ func (c *Cluster) RebalanceOnce(ctx context.Context) error {
 				return err
 			}
 
-			has := false
-
-			for _, copy := range current.Shards[shard] {
-				if copy.Node == target.Node {
-					has = true
-				}
-			}
-
-			if has {
+			if holds(current.Shards[shard], target.Node) {
 				continue
 			}
 
-			old := ""
-
-			for _, copy := range current.Shards[shard] {
-				keep := false
-
-				for _, w := range want {
-					if copy.Node == w.Node {
-						keep = true
-					}
-				}
-
-				if !keep {
-					old = copy.Node
-					break
-				}
-			}
-
+			old := retiredHolder(current.Shards[shard], want)
 			if old == "" {
 				continue
 			}
@@ -232,4 +212,42 @@ func (c *Cluster) RebalanceOnce(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Cluster) healthyNodes(ctx context.Context) []string {
+	names := []string{}
+
+	for name, node := range c.Nodes {
+		call, cancel := c.timeout(ctx)
+		err := node.Store.Health(call)
+
+		cancel()
+
+		if err == nil {
+			names = append(names, name)
+		}
+	}
+
+	return names
+}
+
+func holds(copies []placement.Copy, node string) bool {
+	for _, holder := range copies {
+		if holder.Node == node {
+			return true
+		}
+	}
+
+	return false
+}
+
+// retiredHolder returns the first current holder that the desired placement no longer keeps.
+func retiredHolder(current, want []placement.Copy) string {
+	for _, holder := range current {
+		if !holds(want, holder.Node) {
+			return holder.Node
+		}
+	}
+
+	return ""
 }

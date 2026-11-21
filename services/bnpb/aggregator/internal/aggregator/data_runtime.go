@@ -2,12 +2,9 @@ package aggregator
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -38,19 +35,12 @@ func (e *EpochIngest) Park(ctx context.Context, message ParkedMessage) error {
 		return errors.New("parking writer is bound to another source")
 	}
 
-	switch data := e.Data.(type) {
-	case *Store:
-		return data.park(ctx, message, e.WriterEpoch)
-	case *Cluster:
-		return data.park(ctx, message, e.WriterEpoch)
-	}
-
-	return errors.New("parking unavailable")
+	return e.Data.park(ctx, message, e.WriterEpoch)
 }
 
 // OpenClusterConfig reads mounted configuration containing node DSNs and API
 // connection details. Keep it in a Secret, never in a committed ConfigMap.
-func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
+func OpenClusterConfig(ctx context.Context, path string, limits ClusterLimits) (*Cluster, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -65,42 +55,24 @@ func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
 		return nil, errors.New("at least three configured data nodes required")
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
-
-	token, err := os.ReadFile(config.Placement.TokenFile)
+	remote, err := placement.NewConfigMap(config.Placement.Origin, config.Placement.TokenFile, config.Placement.CAFile, config.Placement.Namespace, config.Placement.Name)
 	if err != nil {
 		return nil, err
 	}
-
-	if config.Placement.CAFile != "" {
-		raw, err := os.ReadFile(config.Placement.CAFile)
-		if err != nil {
-			return nil, err
-		}
-
-		roots := x509.NewCertPool()
-		if !roots.AppendCertsFromPEM(raw) {
-			return nil, errors.New("invalid placement CA")
-		}
-
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
-	}
-
-	remote := &placement.ConfigMap{Client: client, Origin: config.Placement.Origin, Namespace: config.Placement.Namespace, Name: config.Placement.Name, Token: string(token)}
 
 	cached, err := placement.WatchConfigMap(ctx, remote)
 	if err != nil {
 		return nil, err
 	}
 
-	c := &Cluster{Nodes: map[string]*DataNode{}, Deadline: shardDeadline, Placement: cached}
+	c := &Cluster{Nodes: map[string]*DataNode{}, Limits: limits, Placement: cached}
 	for _, entry := range config.Nodes {
 		if entry.Name == "" || c.Nodes[entry.Name] != nil {
 			c.Close()
 			return nil, errors.New("invalid data node names")
 		}
 
-		node, err := OpenDataNode(ctx, entry.Name, entry.URL)
+		node, err := OpenDataNode(ctx, entry.Name, entry.URL, limits)
 		if err != nil {
 			var schemaError *pgconn.PgError
 			if errors.As(err, &schemaError) {
@@ -108,7 +80,7 @@ func OpenClusterConfig(ctx context.Context, path string) (*Cluster, error) {
 				return nil, fmt.Errorf("data node %s initialization failed: %w", entry.Name, err)
 			}
 
-			node, err = offlineDataNode(entry.Name, entry.URL)
+			node, err = offlineDataNode(entry.Name, entry.URL, limits)
 			if err != nil {
 				c.Close()
 				return nil, err
@@ -174,25 +146,11 @@ func (e *EpochIngest) Failure(ctx context.Context, source string, now time.Time)
 		return errors.New("freshness writer is bound to another source")
 	}
 
-	switch data := e.Data.(type) {
-	case *Store:
-		return data.failureEpoch(ctx, source, now, e.WriterEpoch)
-	case *Cluster:
-		return data.failureEpoch(ctx, source, now, e.WriterEpoch)
-	}
-
-	return errors.New("unsupported freshness store")
+	return e.Data.failureEpoch(ctx, source, now, e.WriterEpoch)
 }
 
 func (e *EpochIngest) WarningEvents(ctx context.Context, refs []string) ([]HazardEvent, error) {
-	switch data := e.Data.(type) {
-	case *Store:
-		return data.WarningEvents(ctx, refs)
-	case *Cluster:
-		return data.WarningEvents(ctx, refs)
-	}
-
-	return nil, errors.New("unsupported warning store")
+	return e.Data.WarningEvents(ctx, refs)
 }
 
 func (c *Cluster) Failure(ctx context.Context, source string, now time.Time) error {
@@ -244,7 +202,7 @@ func (c *Cluster) WarningEvents(ctx context.Context, refs []string) ([]HazardEve
 		wanted[ref] = true
 	}
 
-	events, missing, err := c.fanout(ctx, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
+	events, missing, err := fanout(ctx, c, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
 		tx, err := s.begin(ctx, true)
 		if err != nil {
 			return nil, err
@@ -282,27 +240,13 @@ func (c *Cluster) WarningEvents(ctx context.Context, refs []string) ([]HazardEve
 	return events, err
 }
 
-func (c *Cluster) PlacementLease() (*placement.Lease, error) {
-	repository := c.Placement
-	if cached, ok := repository.(*placement.CachedConfigMap); ok {
-		repository = cached.Remote
-	}
-
-	repo, ok := repository.(*placement.ConfigMap)
-	if !ok {
-		return nil, errors.New("placement lease requires Kubernetes repository")
-	}
-
-	return &placement.Lease{Client: repo.Client, Origin: repo.Origin, Namespace: repo.Namespace, Name: repo.Name + "-recovery", Token: repo.Token, Holder: correlationID(), Duration: 15 * time.Second}, nil
-}
-
-func offlineDataNode(name, url string) (*DataNode, error) {
+func offlineDataNode(name, url string, limits ClusterLimits) (*DataNode, error) {
 	ingestConfig, err := pgxpool.ParseConfig(url)
 	if err != nil {
 		return nil, err
 	}
 
-	ingestConfig.MaxConns = 4
+	ingestConfig.MaxConns = limits.IngestPool
 	ingestConfig.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	ingestConfig.ConnConfig.ConnectTimeout = 2 * time.Second
 
@@ -311,7 +255,7 @@ func offlineDataNode(name, url string) (*DataNode, error) {
 		return nil, err
 	}
 
-	queryConfig.MaxConns = 8
+	queryConfig.MaxConns = limits.QueryPool
 	queryConfig.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	queryConfig.ConnConfig.ConnectTimeout = 2 * time.Second
 

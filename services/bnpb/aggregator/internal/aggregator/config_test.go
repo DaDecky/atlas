@@ -30,9 +30,7 @@ func validTestEnv(t *testing.T) {
 		"QUERY_TIMEOUT",
 		"PUBLISH_TIMEOUT",
 		"SOURCE_RETRIES",
-		"PUBLISH_RETRIES",
 		"QUERY_CAPACITY",
-		"PUBLISH_CAPACITY",
 		"QUERY_POOL_SIZE",
 		"INGEST_POOL_SIZE",
 		"HTTP_READ_HEADER_TIMEOUT",
@@ -89,7 +87,6 @@ func TestConfigDefaultsAndRejection(t *testing.T) {
 		{"PVMBG_TOKEN", "test-bmkg"},
 		{"AGGREGATOR_INTERNAL_TOKEN", "test-pvmbg"},
 		{"SOURCE_RETRIES", "6"},
-		{"PUBLISH_RETRIES", "-1"},
 		{"QUERY_CAPACITY", "0"},
 		{"QUERY_POOL_SIZE", "0"},
 		{"SOURCE_TIMEOUT", "0s"},
@@ -147,16 +144,15 @@ func TestPublisherBoundsUnresponsiveBrokerHandshake(t *testing.T) {
 func TestConfigAllowsZeroRetriesButNotZeroCapacity(t *testing.T) {
 	validTestEnv(t)
 	t.Setenv("SOURCE_RETRIES", "0")
-	t.Setenv("PUBLISH_RETRIES", "0")
 
 	c, err := ConfigFromEnv()
-	if err != nil || c.SourceRetries != 0 || c.PublishRetries != 0 {
+	if err != nil || c.SourceRetries != 0 {
 		t.Fatal(c, err)
 	}
 
-	t.Setenv("PUBLISH_CAPACITY", "0")
+	t.Setenv("QUERY_CAPACITY", "0")
 
 	if _, err := ConfigFromEnv(); err == nil {
-		t.Fatal("zero publish capacity accepted")
+		t.Fatal("zero query capacity accepted")
 	}
 }

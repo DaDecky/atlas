@@ -13,8 +13,15 @@ import (
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
 
-// Parking uses reserved metadata shards so it has the same two-copy placement
-// and refill lifecycle as source state. Recovery marks follow idempotent writes.
+// parkingCursor is the global position of a merged page, bound to the requested source.
+type parkingCursor struct {
+	Time       time.Time
+	ID, Source string
+}
+
+// Parking uses the shard of its metadata key, one of the 48 data shards, so it has the
+// same two-copy placement and refill lifecycle as source state.
+// Recovery marks follow idempotent writes.
 func (c *Cluster) Park(ctx context.Context, m ParkedMessage) error {
 	return c.park(ctx, m, 0)
 }
@@ -51,10 +58,7 @@ func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, li
 		return out, errors.New("invalid limit")
 	}
 
-	var after struct {
-		Time       time.Time
-		ID, Source string
-	}
+	var after parkingCursor
 
 	if cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(cursor)
@@ -63,12 +67,44 @@ func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, li
 		}
 	}
 
-	requested := []string{source}
-	if source == "" {
-		requested = []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"}
+	items, cutoff, err := c.sourceParking(ctx, source, cursor, after, limit)
+	if err != nil {
+		return out, err
 	}
 
-	var cutoff *ParkedMessage
+	if publications {
+		items = append(items, c.publicationParking(ctx, source, cursor, limit)...)
+	}
+
+	out.Items = cutParking(mergeParking(items), cutoff)
+
+	if len(out.Items) > limit {
+		out.Items = out.Items[:limit]
+	}
+	// An exactly full merged page may still have more items; returning one extra
+	// empty page is safe and avoids skipping per-source continuation.
+	if len(out.Items) > 0 && (len(out.Items) == limit || cutoff != nil) {
+		last := out.Items[len(out.Items)-1]
+		raw, _ := json.Marshal(parkingCursor{Time: last.ReceivedAt, ID: last.MessageID, Source: source})
+		next := base64.RawURLEncoding.EncodeToString(raw)
+		out.NextCursor = &next
+	}
+
+	return out, nil
+}
+
+// sourceParking reads one page per source and returns the earliest last item of a page
+// that has more, since nothing after it is complete in the merged page.
+func (c *Cluster) sourceParking(ctx context.Context, source, cursor string, after parkingCursor, limit int) ([]ParkedMessage, *ParkedMessage, error) {
+	requested := []string{source}
+	if source == "" {
+		requested = Sources
+	}
+
+	var (
+		items  []ParkedMessage
+		cutoff *ParkedMessage
+	)
 
 	for _, src := range requested {
 		// Local cursor filters the same global timestamp/ID, but binds the source.
@@ -85,87 +121,82 @@ func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, li
 			return s.ListUnprocessed(call, src, local, limit)
 		})
 		if err != nil {
-			return out, err
+			return nil, nil, err
 		}
 
-		out.Items = append(out.Items, page.Items...)
+		items = append(items, page.Items...)
+
 		if page.NextCursor != nil && len(page.Items) > 0 {
 			last := page.Items[len(page.Items)-1]
-			if cutoff == nil || last.ReceivedAt.Before(cutoff.ReceivedAt) || last.ReceivedAt.Equal(cutoff.ReceivedAt) && last.MessageID < cutoff.MessageID {
+			if cutoff == nil || parkedBefore(last, *cutoff) {
 				cutoff = &last
 			}
 		}
 	}
 
-	if publications {
-		// Publication failures live beside each node's outbox, not in source shards.
-		for _, node := range c.Nodes {
-			call, cancel := c.timeout(ctx)
-			page, err := node.Store.ListUnprocessed(call, source, cursor, limit)
+	return items, cutoff, nil
+}
 
-			cancel()
+// publicationParking reads publication failures, which live beside each node's outbox,
+// not in source shards. An unreachable node is skipped.
+func (c *Cluster) publicationParking(ctx context.Context, source, cursor string, limit int) []ParkedMessage {
+	var items []ParkedMessage
 
-			if err != nil {
-				continue
-			}
+	for _, node := range c.Nodes {
+		call, cancel := c.timeout(ctx)
+		page, err := node.Store.ListUnprocessed(call, source, cursor, limit)
 
-			out.Items = append(out.Items, page.Items...)
+		cancel()
+
+		if err == nil {
+			items = append(items, page.Items...)
 		}
 	}
 
+	return items
+}
+
+// mergeParking keeps the copy of each message with the most attempts, in received order.
+func mergeParking(items []ParkedMessage) []ParkedMessage {
 	dedup := map[string]ParkedMessage{}
-	for _, m := range out.Items {
+
+	for _, m := range items {
 		old, exists := dedup[m.MessageID]
 		if !exists || m.Attempts > old.Attempts {
 			dedup[m.MessageID] = m
 		}
 	}
 
-	out.Items = out.Items[:0]
+	merged := make([]ParkedMessage, 0, len(dedup))
 	for _, m := range dedup {
-		out.Items = append(out.Items, m)
+		merged = append(merged, m)
 	}
 
-	sort.Slice(out.Items, func(i, j int) bool {
-		a, b := out.Items[i], out.Items[j]
-		if a.ReceivedAt.Equal(b.ReceivedAt) {
-			return a.MessageID < b.MessageID
-		}
+	sort.Slice(merged, func(i, j int) bool { return parkedBefore(merged[i], merged[j]) })
 
-		return a.ReceivedAt.Before(b.ReceivedAt)
-	})
+	return merged
+}
 
-	if cutoff != nil {
-		end := 0
-		for end < len(out.Items) {
-			message := out.Items[end]
-			if message.ReceivedAt.After(cutoff.ReceivedAt) || message.ReceivedAt.Equal(cutoff.ReceivedAt) && message.MessageID > cutoff.MessageID {
-				break
-			}
-
-			end++
-		}
-
-		out.Items = out.Items[:end]
+// cutParking drops every item after cutoff.
+func cutParking(items []ParkedMessage, cutoff *ParkedMessage) []ParkedMessage {
+	if cutoff == nil {
+		return items
 	}
 
-	more := len(out.Items) > limit
-	if more {
-		out.Items = out.Items[:limit]
-	}
-	// An exactly full merged page may still have more items; returning one extra
-	// empty page is safe and avoids skipping per-source continuation.
-	if len(out.Items) > 0 && (len(out.Items) == limit || cutoff != nil) {
-		last := out.Items[len(out.Items)-1]
-		after.Time = last.ReceivedAt
-		after.ID = last.MessageID
-		after.Source = source
-		raw, _ := json.Marshal(after)
-		next := base64.RawURLEncoding.EncodeToString(raw)
-		out.NextCursor = &next
+	end := 0
+	for end < len(items) && !parkedBefore(*cutoff, items[end]) {
+		end++
 	}
 
-	return out, nil
+	return items[:end]
+}
+
+func parkedBefore(a, b ParkedMessage) bool {
+	if a.ReceivedAt.Equal(b.ReceivedAt) {
+		return a.MessageID < b.MessageID
+	}
+
+	return a.ReceivedAt.Before(b.ReceivedAt)
 }
 
 func (c *Cluster) Replay(ctx context.Context, source string, epoch int64, limit int, decode func(ParkedMessage) (HazardEvent, error)) (int, error) {
@@ -200,75 +231,80 @@ func (c *Cluster) replay(ctx context.Context, source string, epoch int64, limit 
 		return 0, ErrStaleEpoch
 	}
 
-	var page ParkingPage
-
-	if dueOnly || reason != "" {
-		page.Items, err = readMetadata(ctx, c, source, func(call context.Context, s *Store) ([]ParkedMessage, error) {
-			return s.replayCandidates(call, source, limit, reason, dueOnly)
-		})
-	} else {
-		page, err = c.listUnprocessed(ctx, source, "", limit, false)
-	}
-
+	items, err := c.replayItems(ctx, source, limit, reason, dueOnly)
 	if err != nil {
 		return 0, err
 	}
 
 	recovered := 0
-
 	blocked := map[string]bool{}
 
-	for _, m := range page.Items {
-		if m.ReasonCode == "publish_failed" {
+	for _, m := range items {
+		if m.ReasonCode == "publish_failed" || blocked[m.SourceRefID] {
 			continue
 		}
 
-		if blocked[m.SourceRefID] {
-			continue
-		}
-
-		if dueOnly && (m.Status != "retrying" || m.NextAttemptAt == nil || m.NextAttemptAt.After(time.Now())) {
+		if dueOnly && !replayDue(m, time.Now()) {
 			blocked[m.SourceRefID] = true
 			continue
 		}
 
-		h, decodeErr := decode(m)
-		if m.RawCut {
-			decodeErr = errors.New("truncated message requires refetch")
+		ok, err := c.replayOne(ctx, source, epoch, m, decode)
+		if err != nil {
+			return recovered, err
 		}
 
-		if decodeErr != nil {
+		if !ok {
 			blocked[m.SourceRefID] = true
-			if err = c.markParking(ctx, source, epoch, m, false); err != nil {
-				return recovered, err
-			}
-
 			continue
-		}
-
-		if h.Source != source || (m.SourceRefID != "" && m.SourceRefID != h.SourceRefID) {
-			return recovered, errors.New("replay identity mismatch")
-		}
-		// Inspect the current canonical version before replaying an older message.
-		fresh, err := c.event(ctx, h.HazardID)
-		if err != nil && !errors.Is(err, ErrNotFound) {
-			return recovered, err
-		}
-
-		if errors.Is(err, ErrNotFound) || !h.OccurredAt.Before(fresh.OccurredAt) {
-			if _, err = c.write(ctx, WriteBatch{Source: source, Epoch: epoch, Now: time.Now().UTC(), Events: []HazardEvent{h}, sourceLocked: true}, nil, nil); err != nil {
-				return recovered, err
-			}
-		}
-
-		if err = c.markParking(ctx, source, epoch, m, true); err != nil {
-			return recovered, err
 		}
 
 		recovered++
 	}
 
 	return recovered, nil
+}
+
+func (c *Cluster) replayItems(ctx context.Context, source string, limit int, reason string, dueOnly bool) ([]ParkedMessage, error) {
+	if dueOnly || reason != "" {
+		return readMetadata(ctx, c, source, func(call context.Context, s *Store) ([]ParkedMessage, error) {
+			return s.replayCandidates(call, source, limit, reason, dueOnly)
+		})
+	}
+
+	page, err := c.listUnprocessed(ctx, source, "", limit, false)
+
+	return page.Items, err
+}
+
+// replayOne applies one parked message and reports whether it recovered. A message that
+// still fails is marked failed and blocks the later messages of the same event.
+func (c *Cluster) replayOne(ctx context.Context, source string, epoch int64, m ParkedMessage, decode func(ParkedMessage) (HazardEvent, error)) (bool, error) {
+	h, err := decode(m)
+	if m.RawCut {
+		err = errors.New("truncated message requires refetch")
+	}
+
+	if err != nil {
+		return false, c.markParking(ctx, source, epoch, m, false)
+	}
+
+	if h.Source != source || (m.SourceRefID != "" && m.SourceRefID != h.SourceRefID) {
+		return false, errors.New("replay identity mismatch")
+	}
+	// Inspect the current canonical version before replaying an older message.
+	fresh, err := c.event(ctx, h.HazardID)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return false, err
+	}
+
+	if errors.Is(err, ErrNotFound) || !h.OccurredAt.Before(fresh.OccurredAt) {
+		if _, err = c.write(ctx, WriteBatch{Source: source, Epoch: epoch, Now: time.Now().UTC(), Events: []HazardEvent{h}, sourceLocked: true}, nil, nil); err != nil {
+			return false, err
+		}
+	}
+
+	return true, c.markParking(ctx, source, epoch, m, true)
 }
 
 func (c *Cluster) event(ctx context.Context, id string) (HazardEvent, error) {
@@ -317,17 +353,17 @@ func (c *Cluster) markParking(ctx context.Context, source string, epoch int64, m
 	}
 
 	shard := placement.Shard("metadata:" + source)
-	for _, copy := range t.Shards[shard] {
-		if copy.State == "behind" {
+	for _, holder := range t.Shards[shard] {
+		if holder.State == placement.Behind {
 			continue
 		}
 
-		n := c.Nodes[copy.Node]
+		n := c.Nodes[holder.Node]
 		if n == nil {
 			return errors.New("parking copy unavailable")
 		}
 
-		tx, err := c.copyStore(copy, shard).begin(ctx, false)
+		tx, err := c.copyStore(holder, shard).begin(ctx, false)
 		if err != nil {
 			return err
 		}
@@ -340,18 +376,7 @@ func (c *Cluster) markParking(ctx context.Context, source string, epoch int64, m
 		}
 
 		if err == nil {
-			status := "recovered"
-
-			var next *time.Time
-
-			if !recovered {
-				status = "parked"
-				if m.Retryable && m.Attempts+1 < 5 {
-					status = "retrying"
-					v := time.Now().UTC().Add(time.Second * time.Duration(1<<(m.Attempts+1)))
-					next = &v
-				}
-			}
+			status, next := nextParkingStatus(m.Retryable, !recovered, m.Attempts+1, time.Now().UTC())
 
 			_, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET status=$2,attempts=attempts+1,next_attempt_at=$3 WHERE message_id=$1 AND status<>'recovered'`, m.MessageID, status, next)
 		}

@@ -51,11 +51,11 @@ func TestAPIDatabaseCallsLogLatencyAndSafeFailures(t *testing.T) {
 		}
 
 		api := &API{
-			Store:    store,
-			Token:    "test-internal",
-			Timeout:  time.Second,
-			Capacity: make(chan struct{}, 1),
-			Log:      slog.New(slog.NewJSONHandler(&logs, nil)).With("service", "aggregator"),
+			Store:     store,
+			Token:     "test-internal",
+			Timeout:   time.Second,
+			Admission: NewAdmission(1, 0),
+			Log:       slog.New(slog.NewJSONHandler(&logs, nil)).With("service", "aggregator"),
 		}
 		handler := api.Handler()
 
@@ -93,7 +93,7 @@ func TestPollDatabaseCallsLogLatency(t *testing.T) {
 	var logs bytes.Buffer
 
 	store := newMemoryStore()
-	poller := newPoller("PVMBG", server.URL, store, make(chan Publication, 4))
+	poller := newPoller("PVMBG", server.URL, store)
 
 	poller.Log = slog.New(slog.NewJSONHandler(&logs, nil)).With("service", "aggregator")
 	if err := poller.Poll(context.Background(), "database-poll"); err != nil {

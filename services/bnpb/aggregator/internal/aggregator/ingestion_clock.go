@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"atlas/services/bnpb/aggregator/internal/placement"
 )
 
 func normalizeEvents(ctx context.Context, tx pgx.Tx, events []HazardEvent) error {
@@ -75,16 +77,16 @@ func (c *Cluster) assignIngestionTimes(ctx context.Context, b *WriteBatch) error
 		return errors.New("ingestion clock majority unavailable")
 	}
 
+	existing, err := c.existingIngestedAt(ctx, b.Events)
+	if err != nil {
+		return err
+	}
+
 	b.Events = append([]HazardEvent(nil), b.Events...)
 	for i, h := range b.Events {
-		old, err := c.event(ctx, h.HazardID)
-		if err == nil {
-			b.Events[i].IngestedAt = old.IngestedAt
+		if at, found := existing[h.HazardID]; found {
+			b.Events[i].IngestedAt = at
 			continue
-		}
-
-		if !errors.Is(err, ErrNotFound) {
-			return err
 		}
 
 		value := h.IngestedAt.UTC()
@@ -96,18 +98,88 @@ func (c *Cluster) assignIngestionTimes(ctx context.Context, b *WriteBatch) error
 		last = value
 	}
 
+	// The next batch reads a majority, so a majority must hold the new value or time could go back.
+	updated := 0
+
 	for _, node := range c.Nodes {
 		call, cancel := c.timeout(ctx)
 		_, err := node.Store.ingest.Exec(call, `UPDATE public.ingestion_clock SET last_value=GREATEST(last_value,$1) WHERE singleton`, last)
 
 		cancel()
 
-		if err != nil {
-			continue
+		if err == nil {
+			updated++
 		}
+	}
+
+	if updated < len(c.Nodes)/2+1 {
+		return errors.New("ingestion clock update majority unavailable")
 	}
 
 	b.timestampsAssigned = true
 
 	return nil
+}
+
+// existingIngestedAt reads the stored ingestion time of each event that already exists, one query per shard.
+func (c *Cluster) existingIngestedAt(ctx context.Context, events []HazardEvent) (map[string]time.Time, error) {
+	t, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	byShard := map[string][]string{}
+
+	for _, h := range events {
+		shard := placement.Shard(h.HazardID)
+		byShard[shard] = append(byShard[shard], h.HazardID)
+	}
+
+	found := map[string]time.Time{}
+
+	for shard, ids := range byShard {
+		times, err := readCopies(ctx, c, t.Shards[shard], shard, func(call context.Context, s *Store) (map[string]time.Time, error) {
+			return s.ingestedAt(call, ids)
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		for id, at := range times {
+			found[id] = at
+		}
+	}
+
+	return found, nil
+}
+
+func (s *Store) ingestedAt(ctx context.Context, ids []string) (map[string]time.Time, error) {
+	tx, err := s.begin(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, `SELECT hazard_id, ingested_at FROM hazard_events WHERE hazard_id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	times := map[string]time.Time{}
+
+	for rows.Next() {
+		var (
+			id string
+			at time.Time
+		)
+
+		if err = rows.Scan(&id, &at); err != nil {
+			return nil, err
+		}
+
+		times[id] = at
+	}
+
+	return times, rows.Err()
 }

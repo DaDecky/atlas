@@ -19,15 +19,6 @@ type readResult[T any] struct {
 	err   error
 }
 
-const (
-	// Leave enough of the 2 s request budget for fallback and shard queueing.
-	shardDeadline = 400 * time.Millisecond
-	// Hedge a slow copy without doubling the normal read traffic.
-	readHedgeDelay = 150 * time.Millisecond
-	// Bound database pressure while allowing 48 shards to share the request budget.
-	shardReadWorkers = 8
-)
-
 // Each copy has its own deadline. A failed copy is fenced out of reads before
 // acknowledging a degraded write, including failures while parking a message.
 func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, source string, epoch int64, write func(context.Context, *Store) ([]HazardEvent, error)) ([]HazardEvent, error) {
@@ -35,7 +26,7 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 	pending := 0
 
 	for _, holder := range t.Shards[shard] {
-		if holder.State == "behind" {
+		if holder.State == placement.Behind {
 			continue
 		}
 
@@ -108,31 +99,7 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 }
 
 func (c *Cluster) markFailedCopy(ctx context.Context, shard, source string, epoch int64, holder placement.Copy) error {
-	for range 5 {
-		t, _, err := c.Placement.Load(ctx)
-		if err != nil {
-			return err
-		}
-
-		found := false
-
-		for _, current := range t.Shards[shard] {
-			if current.Node == holder.Node && current.StoreID == holder.StoreID {
-				found = true
-			}
-		}
-
-		if !found {
-			return placement.ErrConflict
-		}
-
-		err = c.MarkBehind(ctx, BehindRequest{Source: source, Epoch: epoch, Shard: shard, Copy: holder.Node, Generation: t.Generation})
-		if !errors.Is(err, placement.ErrConflict) {
-			return err
-		}
-	}
-
-	return placement.ErrConflict
+	return c.MarkBehind(ctx, BehindRequest{Source: source, Epoch: epoch, Shard: shard, Copy: holder.Node, StoreID: holder.StoreID})
 }
 
 // Results belong to individual attempts; a canceled loser never mutates the
@@ -147,7 +114,7 @@ func readCopies[T any](ctx context.Context, c *Cluster, copies []placement.Copy,
 	)
 
 	for _, holder := range copies {
-		if holder.State == "serving" && c.Nodes[holder.Node] != nil {
+		if holder.State == placement.Serving && c.Nodes[holder.Node] != nil {
 			serving = append(serving, holder)
 		}
 	}
@@ -173,7 +140,7 @@ func readCopies[T any](ctx context.Context, c *Cluster, copies []placement.Copy,
 	}
 	start()
 
-	timer := time.NewTimer(readHedgeDelay)
+	timer := time.NewTimer(c.Limits.HedgeDelay)
 	defer timer.Stop()
 
 	var last error

@@ -2,38 +2,66 @@ package placement
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
-	"strings"
 	"sync"
-	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/tools/cache"
 )
 
-// CachedConfigMap removes GETs from the data path. Only mutations reach the API;
-// conflicts reload the authoritative snapshot before the caller retries its CAS.
+// CachedConfigMap serves reads from a client-go informer that watches the one placement
+// ConfigMap, so only writes reach the API server. A dropped watch stops reads until the
+// informer lists the ConfigMap again.
 type CachedConfigMap struct {
 	Remote  *ConfigMap
 	mu      sync.RWMutex
 	table   Table
 	version string
 	ready   bool
-	cancel  context.CancelFunc
-	done    chan struct{}
+	factory informers.SharedInformerFactory
+	stop    chan struct{}
 }
 
 func WatchConfigMap(ctx context.Context, remote *ConfigMap) (*CachedConfigMap, error) {
-	t, version, err := remote.Load(ctx)
+	c := &CachedConfigMap{Remote: remote, stop: make(chan struct{})}
+	// RBAC grants list and watch on this one name only, and asks for the matching field selector.
+	c.factory = informers.NewSharedInformerFactoryWithOptions(remote.client, 0,
+		informers.WithNamespace(remote.Namespace),
+		informers.WithTweakListOptions(func(o *metav1.ListOptions) {
+			o.FieldSelector = fields.OneTermEqualSelector("metadata.name", remote.Name).String()
+		}))
+
+	informer := c.factory.Core().V1().ConfigMaps().Informer()
+	if err := informer.SetWatchErrorHandler(func(*cache.Reflector, error) { c.setReady(false) }); err != nil {
+		return nil, fmt.Errorf("watch placement: %w", err)
+	}
+
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    c.observe,
+		UpdateFunc: func(_, obj any) { c.observe(obj) },
+		DeleteFunc: func(any) { c.setReady(false) },
+	})
 	if err != nil {
+		return nil, fmt.Errorf("watch placement: %w", err)
+	}
+
+	c.factory.Start(c.stop)
+
+	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		c.Close()
+
+		return nil, errors.New("placement watch did not sync")
+	}
+
+	if _, _, err = c.Load(ctx); err != nil {
+		c.Close()
+
 		return nil, err
 	}
-	// The caller's startup deadline does not own the lifetime of the watch.
-	lifetime, cancel := context.WithCancel(context.Background())
-
-	c := &CachedConfigMap{Remote: remote, table: t, version: version, ready: true, cancel: cancel, done: make(chan struct{})}
-	go c.run(lifetime)
 
 	return c, nil
 }
@@ -70,23 +98,14 @@ func (c *CachedConfigMap) Load(ctx context.Context) (Table, string, error) {
 	return cloneTable(c.table), c.version, nil
 }
 
-func (c *CachedConfigMap) update(t Table, version string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	// Watch notifications can arrive after a newer PUT response. Generations are
-	// our monotonic counter; Kubernetes resourceVersion itself is opaque.
-	if t.Generation >= c.table.Generation {
-		c.table, c.version = cloneTable(t), version
-	}
-}
-
 func (c *CachedConfigMap) CompareAndSwap(ctx context.Context, version string, t Table) error {
 	v, err := c.Remote.swap(ctx, version, t)
 	if err == nil {
 		c.update(t, v)
+
 		return nil
 	}
-
+	// A conflict reloads the authoritative table before the caller retries.
 	if errors.Is(err, ErrConflict) {
 		fresh, v, loadErr := c.Remote.Load(ctx)
 		if loadErr != nil {
@@ -100,111 +119,37 @@ func (c *CachedConfigMap) CompareAndSwap(ctx context.Context, version string, t 
 }
 
 func (c *CachedConfigMap) Close() {
-	c.cancel()
-	<-c.done
+	close(c.stop)
+	c.factory.Shutdown()
+}
+
+// observe takes a watched ConfigMap. An invalid table stops reads instead of serving it.
+func (c *CachedConfigMap) observe(obj any) {
+	cm := obj.(*corev1.ConfigMap)
+
+	t, err := decode(cm)
+	if err != nil {
+		c.setReady(false)
+		return
+	}
+
+	c.update(t, cm.ResourceVersion)
+}
+
+func (c *CachedConfigMap) update(t Table, version string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Watch events can arrive after a newer write response. Generation is our monotonic
+	// counter, since the resourceVersion of Kubernetes is opaque.
+	if !c.ready || t.Generation >= c.table.Generation {
+		c.table, c.version = cloneTable(t), version
+	}
+
+	c.ready = true
 }
 
 func (c *CachedConfigMap) setReady(ready bool) {
 	c.mu.Lock()
 	c.ready = ready
 	c.mu.Unlock()
-}
-
-func (c *CachedConfigMap) run(ctx context.Context) {
-	defer close(c.done)
-
-	for ctx.Err() == nil {
-		started := time.Now()
-		_ = c.watch(ctx)
-		// Do not keep serving a placement snapshot after losing its watch.
-		c.setReady(false)
-		// Back off short-lived failures; a normally expired 30 s watch reconnects
-		// immediately rather than causing a one-second outage every half minute.
-		if delay := time.Second - time.Since(started); delay > 0 {
-			timer := time.NewTimer(delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
-		// A full reload also handles expired resource versions (HTTP/event 410).
-		for ctx.Err() == nil {
-			t, v, err := c.Remote.Load(ctx)
-			if err == nil {
-				c.update(t, v)
-				break
-			}
-
-			timer := time.NewTimer(time.Second)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
-	}
-}
-
-func (c *CachedConfigMap) watch(ctx context.Context) error {
-	c.mu.RLock()
-	version := c.version
-	c.mu.RUnlock()
-	query := url.Values{"watch": {"true"}, "fieldSelector": {"metadata.name=" + c.Remote.Name}, "resourceVersion": {version}, "timeoutSeconds": {"30"}}
-	endpoint := strings.TrimSuffix(c.Remote.endpoint(), "/"+url.PathEscape(c.Remote.Name)) + "?" + query.Encode()
-
-	call, cancel := context.WithTimeout(ctx, 35*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(call, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+c.Remote.Token)
-	// Streaming watches outlive the ordinary GET/PUT client timeout.
-	client := *c.Remote.Client
-	client.Timeout = 0
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("placement watch status %d", resp.StatusCode)
-	}
-
-	c.setReady(true)
-
-	decoder := json.NewDecoder(resp.Body)
-
-	for {
-		var event struct {
-			Type   string    `json:"type"`
-			Object configMap `json:"object"`
-		}
-		if err = decoder.Decode(&event); err != nil {
-			return err
-		}
-
-		switch event.Type {
-		case "ADDED", "MODIFIED":
-			var t Table
-			if err = json.Unmarshal([]byte(event.Object.Data["placement.json"]), &t); err != nil {
-				return err
-			}
-
-			if err = t.Validate(); err != nil {
-				return err
-			}
-
-			c.update(t, event.Object.Metadata.ResourceVersion)
-		case "ERROR", "DELETED":
-			return errors.New("placement watch reset")
-		}
-	}
 }

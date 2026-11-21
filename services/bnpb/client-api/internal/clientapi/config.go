@@ -18,7 +18,7 @@ type Config struct {
 	Issuer, Audience                                                string
 	PublicKey                                                       ed25519.PublicKey
 	OutboundTimeout                                                 time.Duration
-	RequestCapacity                                                 int
+	RequestCapacity, FieldReservedPercent                           int
 	RabbitMQURL                                                     string
 
 	HTTPReadHeaderTimeout, HTTPReadTimeout, HTTPIdleTimeout, ShutdownTimeout, MaxRetryAfter time.Duration
@@ -29,6 +29,8 @@ const (
 	defaultAddress         = ":8080"
 	defaultOutboundTimeout = 3 * time.Second
 	defaultRequestCapacity = 128
+	// A quarter of the slots stay free for Field Team when Media fills the rest.
+	defaultFieldReservedPercent = 25
 
 	defaultHTTPReadHeaderTimeout = 3 * time.Second
 	defaultHTTPReadTimeout       = 5 * time.Second
@@ -134,6 +136,14 @@ func ConfigFromEnv() (Config, error) {
 		}
 	}
 
+	c.FieldReservedPercent = defaultFieldReservedPercent
+	if raw := os.Getenv("FIELD_TEAM_RESERVED_PERCENT"); raw != "" {
+		c.FieldReservedPercent, err = strconv.Atoi(raw)
+		if err != nil || c.FieldReservedPercent < 0 || c.FieldReservedPercent > 90 {
+			return c, errors.New("invalid FIELD_TEAM_RESERVED_PERCENT")
+		}
+	}
+
 	durations := []struct {
 		key                string
 		fallback, min, max time.Duration
@@ -146,7 +156,7 @@ func ConfigFromEnv() (Config, error) {
 		{"MAX_RETRY_AFTER", defaultMaxRetryAfter, time.Second, 24 * time.Hour, &c.MaxRetryAfter},
 	}
 	for _, d := range durations {
-		if *d.dest, err = durationEnv(d.key, d.fallback, d.min, d.max); err != nil {
+		if *d.dest, err = envDuration(d.key, d.fallback, d.min, d.max); err != nil {
 			return c, err
 		}
 	}
@@ -161,7 +171,7 @@ func ConfigFromEnv() (Config, error) {
 		{"AUTH_VALIDATE_MAX_BYTES", defaultMaxValidateBytes, 512, 1 << 20, &c.MaxValidateBytes},
 	}
 	for _, d := range ints {
-		if *d.dest, err = intEnv(d.key, d.fallback, d.min, d.max); err != nil {
+		if *d.dest, err = envInt(d.key, d.fallback, d.min, d.max); err != nil {
 			return c, err
 		}
 	}
@@ -169,28 +179,28 @@ func ConfigFromEnv() (Config, error) {
 	return c, nil
 }
 
-func durationEnv(name string, fallback, min, max time.Duration) (time.Duration, error) {
+func envDuration(name string, fallback, lowest, highest time.Duration) (time.Duration, error) {
 	raw := os.Getenv(name)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	d, err := time.ParseDuration(raw)
-	if err != nil || d < min || d > max {
+	if err != nil || d < lowest || d > highest {
 		return 0, errors.New("invalid " + name)
 	}
 
 	return d, nil
 }
 
-func intEnv(name string, fallback, min, max int) (int, error) {
+func envInt(name string, fallback, lowest, highest int) (int, error) {
 	raw := os.Getenv(name)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < min || n > max {
+	if err != nil || n < lowest || n > highest {
 		return 0, errors.New("invalid " + name)
 	}
 

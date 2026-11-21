@@ -1,14 +1,18 @@
 package placement
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
 )
 
 type Repository interface {
@@ -16,69 +20,50 @@ type Repository interface {
 	CompareAndSwap(context.Context, string, Table) error
 }
 
+// ConfigMap keeps the placement table in one ConfigMap, under the key placement.json.
 type ConfigMap struct {
-	Client                         *http.Client
-	Origin, Namespace, Name, Token string
+	client          kubernetes.Interface
+	Namespace, Name string
 }
 
-type configMap struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Metadata   struct {
-		Name            string `json:"name"`
-		ResourceVersion string `json:"resourceVersion,omitempty"`
-	} `json:"metadata"`
-	Data map[string]string `json:"data"`
-}
+// Each call to the API server has its own deadline, since the watch shares the client.
+const callTimeout = 5 * time.Second
 
 var ErrConflict = errors.New("placement version conflict")
 
-func (c *ConfigMap) endpoint() string {
-	return c.Origin + "/api/v1/namespaces/" + url.PathEscape(c.Namespace) + "/configmaps/" + url.PathEscape(c.Name)
-}
+// NewConfigMap connects through a token file, which client-go reloads as the kubelet rotates it.
+func NewConfigMap(origin, tokenFile, caFile, namespace, name string) (*ConfigMap, error) {
+	config := &rest.Config{Host: origin, BearerTokenFile: tokenFile, TLSClientConfig: rest.TLSClientConfig{CAFile: caFile}}
 
-func (c *ConfigMap) request(ctx context.Context, method string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.endpoint(), body)
+	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create placement client: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	req.Header.Set("Content-Type", "application/json")
-
-	return c.Client.Do(req)
+	return &ConfigMap{client: client, Namespace: namespace, Name: name}, nil
 }
 
 func (c *ConfigMap) Load(ctx context.Context) (Table, string, error) {
-	var t Table
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
 
-	resp, err := c.request(ctx, http.MethodGet, nil)
+	cm, err := c.client.CoreV1().ConfigMaps(c.Namespace).Get(ctx, c.Name, metav1.GetOptions{})
 	if err != nil {
-		return t, "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return t, "", fmt.Errorf("placement GET status %d", resp.StatusCode)
+		return Table{}, "", fmt.Errorf("read placement: %w", err)
 	}
 
-	var cm configMap
-	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&cm); err != nil {
-		return t, "", err
-	}
+	t, err := decode(cm)
 
-	if err = json.Unmarshal([]byte(cm.Data["placement.json"]), &t); err != nil {
-		return t, "", err
-	}
-
-	return t, cm.Metadata.ResourceVersion, t.Validate()
+	return t, cm.ResourceVersion, err
 }
 
 func (c *ConfigMap) CompareAndSwap(ctx context.Context, version string, t Table) error {
 	_, err := c.swap(ctx, version, t)
+
 	return err
 }
 
+// swap writes t only if the ConfigMap is still at version, and returns the new version.
 func (c *ConfigMap) swap(ctx context.Context, version string, t Table) (string, error) {
 	if err := t.Validate(); err != nil {
 		return "", err
@@ -89,37 +74,52 @@ func (c *ConfigMap) swap(ctx context.Context, version string, t Table) (string, 
 		return "", err
 	}
 
-	cm := configMap{APIVersion: "v1", Kind: "ConfigMap", Data: map[string]string{"placement.json": string(raw)}}
-	cm.Metadata.Name = c.Name
-	cm.Metadata.ResourceVersion = version
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
 
-	body, err := json.Marshal(cm)
-	if err != nil {
-		return "", err
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: c.Name, Namespace: c.Namespace, ResourceVersion: version},
+		Data:       map[string]string{"placement.json": string(raw)},
 	}
 
-	resp, err := c.request(ctx, http.MethodPut, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 409 {
+	updated, err := c.client.CoreV1().ConfigMaps(c.Namespace).Update(ctx, cm, metav1.UpdateOptions{})
+	if apierrors.IsConflict(err) {
 		return "", ErrConflict
 	}
 
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("placement PUT status %d", resp.StatusCode)
+	if err != nil {
+		return "", fmt.Errorf("write placement: %w", err)
 	}
 
-	var updated configMap
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&updated); err != nil {
-		return "", err
+	return updated.ResourceVersion, nil
+}
+
+func decode(cm *corev1.ConfigMap) (Table, error) {
+	var t Table
+	if err := json.Unmarshal([]byte(cm.Data["placement.json"]), &t); err != nil {
+		return t, fmt.Errorf("decode placement: %w", err)
 	}
 
-	if updated.Metadata.ResourceVersion == "" {
-		return "", errors.New("placement PUT missing resource version")
-	}
+	return t, t.Validate()
+}
 
-	return updated.Metadata.ResourceVersion, nil
+// Update applies change to the newest table and swaps it in. A conflict means another writer
+// swapped first, so it retries with the backoff of client-go, and change rechecks its own rules.
+// change returns false when the table already holds what it wants.
+func Update(ctx context.Context, repo Repository, change func(*Table) (bool, error)) error {
+	return retry.OnError(retry.DefaultRetry, func(err error) bool { return errors.Is(err, ErrConflict) }, func() error {
+		t, version, err := repo.Load(ctx)
+		if err != nil {
+			return err
+		}
+
+		changed, err := change(&t)
+		if err != nil || !changed {
+			return err
+		}
+
+		t.Generation++
+
+		return repo.CompareAndSwap(ctx, version, t)
+	})
 }

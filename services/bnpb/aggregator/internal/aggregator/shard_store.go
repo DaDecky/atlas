@@ -22,6 +22,9 @@ type ShardStore interface {
 	Epoch(context.Context, string) (int64, error)
 	Seal(context.Context, string, int64) error
 	MarkBehind(context.Context, BehindRequest) error
+	WarningEvents(context.Context, []string) ([]HazardEvent, error)
+	failureEpoch(context.Context, string, time.Time, int64) error
+	park(context.Context, ParkedMessage, int64) error
 }
 
 // WriteBatch belongs to exactly one source and one sealed writer epoch.
@@ -42,15 +45,15 @@ type StreamState struct {
 	Payload json.RawMessage
 }
 
-// BehindRequest identifies a placement compare-and-swap authorized by the
-// source's current writer. Replica code must reject an outdated generation or
-// epoch before permitting a single-copy write. B1 has no replica placement.
+// BehindRequest identifies a placement change authorized by the source's current writer.
+// Replica code must reject an outdated epoch or copy incarnation before permitting a
+// single-copy write. B1 has no replica placement.
 type BehindRequest struct {
-	Source     string
-	Epoch      int64
-	Shard      string
-	Copy       string
-	Generation int64
+	Source  string
+	Epoch   int64
+	Shard   string
+	Copy    string
+	StoreID string
 }
 
 var (
@@ -216,7 +219,7 @@ func (s *Store) commitBatch(ctx context.Context, batch WriteBatch, checkpoint *t
 		}
 	}
 
-	changed, err := saveEvents(ctx, tx, batch.Source, batch.Events, checkpoint, batch.Now, batch.timestampsAssigned)
+	changed, err := saveEvents(ctx, tx, batch, checkpoint)
 	if err != nil {
 		return nil, err
 	}

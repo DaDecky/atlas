@@ -22,6 +22,8 @@ type AccessClaims struct {
 	TokenID      string `json:"jti"`
 }
 
+var knownScopes = map[string]bool{"hazards:summary": true, "hazards:raw": true, "reports:write": true, "ops:read": true}
+
 func hasScope(scopes, wanted string) bool {
 	for _, scope := range strings.Fields(scopes) {
 		if scope == wanted {
@@ -35,7 +37,7 @@ func hasScope(scopes, wanted string) bool {
 func validScopes(scopes string) bool {
 	seen := map[string]bool{}
 	for _, scope := range strings.Fields(scopes) {
-		if seen[scope] || scope != "hazards:summary" && scope != "hazards:raw" && scope != "reports:write" && scope != "ops:read" {
+		if seen[scope] || !knownScopes[scope] {
 			return false
 		}
 
@@ -56,28 +58,11 @@ func verifyAccessToken(
 		return AccessClaims{}, errors.New("malformed token")
 	}
 
-	enc := base64.RawURLEncoding
-
-	headerBytes, err := enc.DecodeString(parts[0])
-	if err != nil {
-		return AccessClaims{}, errors.New("malformed token header")
+	if err := verifySignature(parts, key); err != nil {
+		return AccessClaims{}, err
 	}
 
-	var header map[string]string
-	if json.Unmarshal(headerBytes, &header) != nil || header["alg"] != "EdDSA" || header["typ"] != "JWT" {
-		return AccessClaims{}, errors.New("unsupported token algorithm")
-	}
-
-	signature, err := enc.DecodeString(parts[2])
-	if err != nil || len(signature) != ed25519.SignatureSize {
-		return AccessClaims{}, errors.New("malformed token signature")
-	}
-
-	if !ed25519.Verify(key, []byte(parts[0]+"."+parts[1]), signature) {
-		return AccessClaims{}, errors.New("invalid token signature")
-	}
-
-	payload, err := enc.DecodeString(parts[1])
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return AccessClaims{}, errors.New("malformed token payload")
 	}
@@ -87,16 +72,50 @@ func verifyAccessToken(
 		return AccessClaims{}, errors.New("malformed token claims")
 	}
 
+	if err = checkClaims(claims, issuer, audience, now); err != nil {
+		return AccessClaims{}, err
+	}
+
+	return claims, nil
+}
+
+// verifySignature accepts only an EdDSA JWT header and a valid Ed25519 signature.
+func verifySignature(parts []string, key ed25519.PublicKey) error {
+	enc := base64.RawURLEncoding
+
+	headerBytes, err := enc.DecodeString(parts[0])
+	if err != nil {
+		return errors.New("malformed token header")
+	}
+
+	var header map[string]string
+	if json.Unmarshal(headerBytes, &header) != nil || header["alg"] != "EdDSA" || header["typ"] != "JWT" {
+		return errors.New("unsupported token algorithm")
+	}
+
+	signature, err := enc.DecodeString(parts[2])
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return errors.New("malformed token signature")
+	}
+
+	if !ed25519.Verify(key, []byte(parts[0]+"."+parts[1]), signature) {
+		return errors.New("invalid token signature")
+	}
+
+	return nil
+}
+
+func checkClaims(claims AccessClaims, issuer, audience string, now time.Time) error {
 	if claims.Issuer != issuer || claims.Audience != audience || claims.Subject == "" ||
 		claims.Subject != claims.ClientID || !validScopes(claims.Scope) ||
 		claims.SessionID == "" || claims.TokenVersion < 1 || claims.TokenID == "" {
-		return AccessClaims{}, errors.New("invalid token claims")
+		return errors.New("invalid token claims")
 	}
 
 	if claims.IssuedAt <= 0 || claims.ExpiresAt <= claims.IssuedAt || now.Unix() >= claims.ExpiresAt ||
 		claims.IssuedAt > now.Add(time.Minute).Unix() {
-		return AccessClaims{}, errors.New("expired or invalid token time")
+		return errors.New("expired or invalid token time")
 	}
 
-	return claims, nil
+	return nil
 }

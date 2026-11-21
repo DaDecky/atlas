@@ -79,28 +79,28 @@ func parsePrivateKey(raw string) (ed25519.PrivateKey, error) {
 	return key, nil
 }
 
-func durationEnv(name string, fallback, min, max time.Duration) (time.Duration, error) {
+func envDuration(name string, fallback, lowest, highest time.Duration) (time.Duration, error) {
 	raw := os.Getenv(name)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	d, err := time.ParseDuration(raw)
-	if err != nil || d < min || d > max {
+	if err != nil || d < lowest || d > highest {
 		return 0, fmt.Errorf("invalid %s", name)
 	}
 
 	return d, nil
 }
 
-func intEnv(name string, fallback, min, max int) (int, error) {
+func envInt(name string, fallback, lowest, highest int) (int, error) {
 	raw := os.Getenv(name)
 	if raw == "" {
 		return fallback, nil
 	}
 
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < min || n > max {
+	if err != nil || n < lowest || n > highest {
 		return 0, fmt.Errorf("invalid %s", name)
 	}
 
@@ -146,7 +146,7 @@ func ConfigFromEnv() (Config, error) {
 		{"STORE_TIMEOUT", defaultStoreTimeout, 100 * time.Millisecond, time.Minute, &c.StoreTimeout},
 	}
 	for _, d := range durations {
-		if *d.dest, err = durationEnv(d.key, d.fallback, d.min, d.max); err != nil {
+		if *d.dest, err = envDuration(d.key, d.fallback, d.min, d.max); err != nil {
 			return c, err
 		}
 	}
@@ -161,7 +161,7 @@ func ConfigFromEnv() (Config, error) {
 		{"AUTH_MAX_BODY_BYTES", defaultMaxBodyBytes, 512, 1 << 20, &c.MaxBodyBytes},
 	}
 	for _, d := range ints {
-		if *d.dest, err = intEnv(d.key, d.fallback, d.min, d.max); err != nil {
+		if *d.dest, err = envInt(d.key, d.fallback, d.min, d.max); err != nil {
 			return c, err
 		}
 	}

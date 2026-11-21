@@ -43,6 +43,14 @@ type Parking interface {
 	RetryDue(context.Context, string, int64, int, func(ParkedMessage) (HazardEvent, error)) (int, error)
 }
 
+const (
+	parkingRetrying  = "retrying"
+	parkingParked    = "parked"
+	parkingRecovered = "recovered"
+	// A retryable message gets five attempts, waiting 1, 2, 4, 8, and 16 seconds.
+	parkingAttempts = 5
+)
+
 const parkingColumns = `message_id,source,received_at,source_ref_id,raw,raw_length,raw_sha256,raw_cut,reason_code,reason,retryable,attempts,next_attempt_at,status,correlation_id`
 
 // Row limits alone allow 1000 four-MiB records to exhaust a 512-MiB pod.
@@ -78,12 +86,7 @@ func (s *Store) park(ctx context.Context, m ParkedMessage, epoch int64) error {
 		return errors.New("invalid cut body metadata")
 	}
 
-	m.Status = "parked"
-	if m.Retryable {
-		m.Status = "retrying"
-		next := m.ReceivedAt.Add(time.Second)
-		m.NextAttemptAt = &next
-	}
+	m.Status, m.NextAttemptAt = nextParkingStatus(m.Retryable, true, 0, m.ReceivedAt)
 
 	tx, err := s.begin(ctx, false)
 	if err != nil {
@@ -211,67 +214,73 @@ func (s *Store) replay(ctx context.Context, source string, epoch int64, limit in
 	}
 
 	recovered := 0
-
 	blocked := map[string]bool{}
+
 	for _, m := range pending {
 		if blocked[m.SourceRefID] {
 			continue
 		}
 
-		if dueOnly && (m.Status != "retrying" || m.NextAttemptAt == nil || m.NextAttemptAt.After(time.Now())) {
+		if dueOnly && !replayDue(m, time.Now()) {
 			blocked[m.SourceRefID] = true
 			continue
 		}
 
-		h, decodeErr := decode(m)
-		if m.RawCut {
-			decodeErr = errors.New("truncated input requires refetch")
+		ok, err := replayInTx(ctx, tx, source, m, decode)
+		if err != nil {
+			return 0, err
 		}
 
-		if decodeErr != nil {
-			attempts := m.Attempts + 1
-			status := "parked"
-
-			var next *time.Time
-
-			if m.Retryable && attempts < 5 {
-				status = "retrying"
-				value := time.Now().UTC().Add(time.Second * time.Duration(1<<attempts))
-				next = &value
-			}
-
-			if _, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET attempts=$2,status=$3,next_attempt_at=$4 WHERE message_id=$1`, m.MessageID, attempts, status, next); err != nil {
-				return 0, err
-			}
-
+		if !ok {
 			blocked[m.SourceRefID] = true
-
 			continue
-		}
-
-		if h.Source != source || (m.SourceRefID != "" && h.SourceRefID != m.SourceRefID) {
-			return 0, errors.New("replay identity mismatch")
-		}
-
-		var newest *time.Time
-		if err = tx.QueryRow(ctx, `SELECT max(occurred_at) FROM hazard_events WHERE source=$1 AND source_ref_id=$2`, source, h.SourceRefID).Scan(&newest); err != nil {
-			return 0, err
-		}
-
-		if newest == nil || !h.OccurredAt.Before(*newest) {
-			if _, err = saveEvents(ctx, tx, source, []HazardEvent{h}, nil, time.Now().UTC()); err != nil {
-				return 0, err
-			}
-		}
-
-		if _, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET status='recovered',attempts=attempts+1,next_attempt_at=NULL WHERE message_id=$1`, m.MessageID); err != nil {
-			return 0, err
 		}
 
 		recovered++
 	}
 
 	return recovered, tx.Commit(ctx)
+}
+
+// replayDue reports whether a retrying message has reached its next attempt.
+func replayDue(m ParkedMessage, now time.Time) bool {
+	return m.Status == parkingRetrying && m.NextAttemptAt != nil && !m.NextAttemptAt.After(now)
+}
+
+// replayInTx applies one parked message inside the replay transaction and reports
+// whether it recovered. A message that still fails counts one more attempt.
+func replayInTx(ctx context.Context, tx pgx.Tx, source string, m ParkedMessage, decode func(ParkedMessage) (HazardEvent, error)) (bool, error) {
+	h, err := decode(m)
+	if m.RawCut {
+		err = errors.New("truncated input requires refetch")
+	}
+
+	if err != nil {
+		attempts := m.Attempts + 1
+		status, next := nextParkingStatus(m.Retryable, true, attempts, time.Now().UTC())
+		_, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET attempts=$2,status=$3,next_attempt_at=$4 WHERE message_id=$1`, m.MessageID, attempts, status, next)
+
+		return false, err
+	}
+
+	if h.Source != source || (m.SourceRefID != "" && h.SourceRefID != m.SourceRefID) {
+		return false, errors.New("replay identity mismatch")
+	}
+
+	var newest *time.Time
+	if err = tx.QueryRow(ctx, `SELECT max(occurred_at) FROM hazard_events WHERE source=$1 AND source_ref_id=$2`, source, h.SourceRefID).Scan(&newest); err != nil {
+		return false, err
+	}
+
+	if newest == nil || !h.OccurredAt.Before(*newest) {
+		if _, err = saveEvents(ctx, tx, WriteBatch{Source: source, Events: []HazardEvent{h}, Now: time.Now().UTC()}, nil); err != nil {
+			return false, err
+		}
+	}
+
+	_, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET status='recovered',attempts=attempts+1,next_attempt_at=NULL WHERE message_id=$1`, m.MessageID)
+
+	return err == nil, err
 }
 
 func pendingParking(ctx context.Context, tx pgx.Tx, source string, limit int, reason string, dueOnly, lock bool) ([]ParkedMessage, error) {
@@ -345,4 +354,19 @@ func RunParkingRetries(ctx context.Context, p Parking, source string, epoch int6
 			return
 		}
 	}
+}
+
+// nextParkingStatus decides where a message goes after attempt number attempts, counting the first park as 0.
+func nextParkingStatus(retryable, failed bool, attempts int, now time.Time) (string, *time.Time) {
+	if !failed {
+		return parkingRecovered, nil
+	}
+
+	if !retryable || attempts >= parkingAttempts {
+		return parkingParked, nil
+	}
+
+	next := now.Add(time.Second << attempts)
+
+	return parkingRetrying, &next
 }

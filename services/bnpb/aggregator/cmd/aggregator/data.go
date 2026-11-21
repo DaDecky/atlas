@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"os"
-	"time"
 
 	"atlas/services/bnpb/aggregator/internal/aggregator"
 )
@@ -19,8 +18,8 @@ type runtimeData interface {
 }
 
 func openData(ctx context.Context, c aggregator.Config) (runtimeData, error) {
-	if path := os.Getenv("M2_DATA_CONFIG"); path != "" {
-		return aggregator.OpenClusterConfig(ctx, path)
+	if path := os.Getenv("CLUSTER_DATA_CONFIG"); path != "" {
+		return aggregator.OpenClusterConfig(ctx, path, c.ClusterLimits())
 	}
 
 	return aggregator.OpenStore(ctx, c.DatabaseURL, c.IngestPool, c.QueryPool, c.DBConnectTimeout)
@@ -28,8 +27,8 @@ func openData(ctx context.Context, c aggregator.Config) (runtimeData, error) {
 
 func dataHandler(api *aggregator.API, store runtimeData, c aggregator.Config, replay map[string]aggregator.ReplaySource) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/internal/audit/", (&aggregator.AuditAPI{Store: store, Parking: store, Token: os.Getenv("AUDIT_TOKEN"), Timeout: 10 * time.Second}).Handler())
-	ops := &aggregator.OpsAPI{Parking: store, Token: c.InternalToken, Replay: replay}
+	mux.Handle("/internal/audit/", (&aggregator.AuditAPI{Store: store, Parking: store, Token: os.Getenv("AUDIT_TOKEN"), Timeout: c.AuditTimeout}).Handler())
+	ops := &aggregator.OpsAPI{Parking: store, Token: c.InternalToken, Replay: replay, Capacity: c.OpsCapacity}
 
 	if cluster, ok := store.(*aggregator.Cluster); ok {
 		mux.Handle("GET /internal/data/metrics", aggregator.DataMetricsHandler(cluster, c.InternalToken))

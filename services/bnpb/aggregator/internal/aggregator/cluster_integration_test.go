@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -55,10 +57,10 @@ func dataCluster(t *testing.T) *Cluster {
 	for i, name := range []string{"a", "b", "c"} {
 		url := os.Getenv([]string{"DATA_TEST_A", "DATA_TEST_B", "DATA_TEST_C"}[i])
 		if url == "" {
-			t.Skip("run make data-integration")
+			t.Fatal("run make data-integration")
 		}
 
-		node, err := OpenDataNode(ctx, name, url)
+		node, err := OpenDataNode(ctx, name, url, DefaultClusterLimits())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +94,10 @@ func dataCluster(t *testing.T) *Cluster {
 	table, _ := placement.New([]string{"a", "b", "c"})
 	repo := &memoryPlacement{table: table}
 
-	c := &Cluster{Nodes: nodes, Placement: repo, Deadline: time.Second}
+	limits := DefaultClusterLimits()
+	limits.ShardDeadline = time.Second
+
+	c := &Cluster{Nodes: nodes, Placement: repo, Limits: limits}
 	for _, source := range []string{"BMKG", "PVMBG", "SATELIT", "SENSOR_PANTAI"} {
 		if err := c.Seal(ctx, source, 1); err != nil {
 			t.Fatal(err)
@@ -170,8 +175,7 @@ func TestDataIntegrationDualWriteWipeRefillAndNextLoss(t *testing.T) {
 	for shard, copies := range table.Shards {
 		for _, copy := range copies {
 			if copy.Node == "b" {
-				current, _, _ := c.Placement.Load(ctx)
-				if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: "b", Generation: current.Generation}); err != nil {
+				if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: "b", StoreID: copy.StoreID}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -249,7 +253,7 @@ func TestDataIntegrationLiveRefillAndAudit(t *testing.T) {
 	table, _, _ := c.Placement.Load(ctx)
 
 	target := table.Shards[shard][1].Node
-	if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: target, Generation: table.Generation}); err != nil {
+	if err := c.MarkBehind(ctx, BehindRequest{Source: "BMKG", Epoch: 1, Shard: shard, Copy: target, StoreID: table.Shards[shard][1].StoreID}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -418,10 +422,10 @@ func TestDataIntegrationNewNodeJoinsWithoutStoppingReads(t *testing.T) {
 
 	url := os.Getenv("DATA_TEST_D")
 	if url == "" {
-		t.Skip("fourth local database required")
+		t.Fatal("fourth local database required")
 	}
 
-	node, err := OpenDataNode(ctx, "d", url)
+	node, err := OpenDataNode(ctx, "d", url, DefaultClusterLimits())
 	if err != nil {
 		t.Fatal(err)
 	}

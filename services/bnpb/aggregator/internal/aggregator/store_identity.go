@@ -2,7 +2,6 @@ package aggregator
 
 import (
 	"context"
-	"errors"
 
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
@@ -21,10 +20,7 @@ func (c *Cluster) copyStore(holder placement.Copy, shard string) *Store {
 	s := *c.Nodes[holder.Node].Shards[shard]
 	s.storeID = holder.StoreID
 
-	s.deadline = c.Deadline
-	if s.deadline <= 0 {
-		s.deadline = shardDeadline
-	}
+	s.deadline = c.Limits.ShardDeadline
 
 	return &s
 }
@@ -47,12 +43,7 @@ func (c *Cluster) detectStore(ctx context.Context, name string) (bool, error) {
 		return false, err
 	}
 
-	for range 5 {
-		t, version, err := c.Placement.Load(call)
-		if err != nil {
-			return false, err
-		}
-
+	err = placement.Update(call, c.Placement, func(t *placement.Table) (bool, error) {
 		changed := false
 
 		for shard, copies := range t.Shards {
@@ -62,7 +53,10 @@ func (c *Cluster) detectStore(ctx context.Context, name string) (bool, error) {
 				}
 
 				if count < placement.Shards || (holder.StoreID != "" && holder.StoreID != id) {
-					t.Shards[shard][i].State = "behind"
+					if err := t.Transition(shard, name, placement.Behind); err != nil {
+						return false, err
+					}
+
 					changed = true
 				}
 
@@ -73,17 +67,8 @@ func (c *Cluster) detectStore(ctx context.Context, name string) (bool, error) {
 			}
 		}
 
-		if !changed {
-			return count < placement.Shards, nil
-		}
+		return changed, nil
+	})
 
-		t.Generation++
-
-		err = c.Placement.CompareAndSwap(call, version, t)
-		if !errors.Is(err, placement.ErrConflict) {
-			return count < placement.Shards, err
-		}
-	}
-
-	return false, placement.ErrConflict
+	return count < placement.Shards, err
 }

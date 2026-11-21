@@ -11,10 +11,11 @@ rules:
   - apiGroups: ['']
     resources: [configmaps]
     resourceNames: [canonical-placement]
-    verbs: [get, update, watch]
+    # The informer lists and watches with a metadata.name field selector, which RBAC requires for names.
+    verbs: [get, list, watch, update]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
-    resourceNames: [canonical-placement-recovery, aggregator-bmkg, aggregator-pvmbg, aggregator-satelit]
+    resourceNames: [aggregator-placement, aggregator-bmkg, aggregator-pvmbg, aggregator-satelit, aggregator-sensor-pantai]
     verbs: [get, update]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]

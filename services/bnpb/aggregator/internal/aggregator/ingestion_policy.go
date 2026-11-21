@@ -114,10 +114,7 @@ func (p *Poller) park(ctx context.Context, path, id string, raw []byte, code, re
 
 	var object Object
 	if utf8.Valid(raw) && json.Unmarshal(raw, &object) == nil && object != nil {
-		key := "report_id"
-		if p.Source == "BMKG" {
-			key = "event_id"
-		}
+		key := pollerSources[p.Source].idField
 
 		if path == "/tsunami-warnings" {
 			key = "related_event_id"
@@ -187,14 +184,12 @@ func (p *Poller) DecodeParked(ctx context.Context, m ParkedMessage) (HazardEvent
 		return ApplyWarnings(stored[0], []Warning{warning}), nil
 	}
 
-	if p.Source == "BMKG" {
-		return MapSeismic(object, nil, time.Now().UTC())
-	}
+	src := pollerSources[p.Source]
 
-	policy, err := ReadSchemaPolicy(p.PolicyFile)
+	policy, err := p.schemaPolicy(src)
 	if err != nil {
 		return HazardEvent{}, err
 	}
 
-	return policy.MapVolcanic(object, time.Now().UTC())
+	return src.mapRecord(object, nil, policy, time.Now().UTC())
 }

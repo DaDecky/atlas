@@ -1,9 +1,12 @@
+//go:build integration
+
 package aggregator
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -22,7 +25,7 @@ func integrationStore(t *testing.T) *Store {
 
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("set TEST_DATABASE_URL or run make integration")
+		t.Fatal("set TEST_DATABASE_URL or run make integration")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -45,6 +48,43 @@ func integrationStore(t *testing.T) *Store {
 	t.Cleanup(s.Close)
 
 	return s
+}
+
+// newOutboxEvents returns the outbox rows that seen does not hold yet, in insertion order, and adds them to seen.
+func newOutboxEvents(t *testing.T, s *Store, seen map[string]bool) []HazardEvent {
+	t.Helper()
+
+	rows, err := s.ingest.Query(context.Background(), `SELECT payload FROM publication_outbox ORDER BY created_at, hazard_id, revision`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+
+	events := []HazardEvent{}
+
+	for rows.Next() {
+		var (
+			raw []byte
+			h   HazardEvent
+		)
+
+		if err = rows.Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+
+		if err = json.Unmarshal(raw, &h); err != nil {
+			t.Fatal(err)
+		}
+
+		key := fmt.Sprintf("%s:%d", h.HazardID, h.Revision)
+		if !seen[key] {
+			seen[key] = true
+
+			events = append(events, h)
+		}
+	}
+
+	return events
 }
 
 func TestIntegrationStoreCommitRollbackRestartAndOwnership(t *testing.T) {
@@ -236,9 +276,8 @@ func TestIntegrationLivePollingMappingFreshnessAndReads(t *testing.T) {
 	}))
 	defer slow.Close()
 
-	pending := make(chan Publication, 64)
-	a := newPoller("BMKG", fast.URL, s, pending)
-	b := newPoller("PVMBG", slow.URL, s, pending)
+	a := newPoller("BMKG", fast.URL, s)
+	b := newPoller("PVMBG", slow.URL, s)
 	b.Timeout = 4 * time.Second
 
 	if err := a.Poll(ctx, "seed-bmkg"); err != nil {
@@ -249,9 +288,11 @@ func TestIntegrationLivePollingMappingFreshnessAndReads(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	seen := map[string]bool{}
 	oldIDs := map[string]bool{}
-	for len(pending) > 0 {
-		oldIDs[(<-pending).Event.HazardID] = true
+
+	for _, h := range newOutboxEvents(t, s, seen) {
+		oldIDs[h.HazardID] = true
 	}
 
 	schema.Store(true)
@@ -265,22 +306,21 @@ func TestIntegrationLivePollingMappingFreshnessAndReads(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 2 {
-		t.Fatal("missing late warning revision or new volcanic event", len(pending))
+	queued := newOutboxEvents(t, s, seen)
+	if len(queued) != 2 {
+		t.Fatal("missing late warning revision or new volcanic event", len(queued))
 	}
 
-	update := <-pending
-	if !oldIDs[update.Event.HazardID] || update.Event.Revision != 2 || update.Event.Severity != "AWAS" {
+	update := queued[0]
+	if !oldIDs[update.HazardID] || update.Revision != 2 || update.Severity != "AWAS" {
 		t.Fatal("late warning publication", update)
 	}
-
-	<-pending
 
 	if err := a.Poll(ctx, "same-warning"); err != nil {
 		t.Fatal(err)
 	}
 
-	if len(pending) != 0 {
+	if queued = newOutboxEvents(t, s, seen); len(queued) != 0 {
 		t.Fatal("unchanged warning republished")
 	}
 
@@ -302,7 +342,7 @@ func TestIntegrationLivePollingMappingFreshnessAndReads(t *testing.T) {
 		t.Fatal("late warning or identity failed", quakes, err)
 	}
 
-	api := (&API{Store: s, Token: "test-internal", Timeout: time.Second, Capacity: make(chan struct{}, 64), Log: testLog()}).Handler()
+	api := (&API{Store: s, Token: "test-internal", Timeout: time.Second, Admission: NewAdmission(64, 0), Log: testLog()}).Handler()
 
 	callsBefore := bmkgCalls.Load()
 	if request(api, "/internal/hazards?source=BMKG", "test-internal").Code != 200 || bmkgCalls.Load() != callsBefore {
@@ -389,7 +429,7 @@ func TestIntegrationLivePollingMappingFreshnessAndReads(t *testing.T) {
 func TestIntegrationRabbitFanoutConfirmAndReconnect(t *testing.T) {
 	broker := os.Getenv("TEST_RABBITMQ_URL")
 	if broker == "" {
-		t.Skip("set TEST_RABBITMQ_URL or run make integration")
+		t.Fatal("set TEST_RABBITMQ_URL or run make integration")
 	}
 
 	conn, err := amqp.Dial(broker)

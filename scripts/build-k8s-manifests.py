@@ -83,14 +83,14 @@ def workload(name, role, port, sizes, *, stateful=False, health="/health", owner
 def main():
     objects = []
     for name, owner in [("auth-db", "auth"), ("bmkg-db", "bmkg"), ("pvmbg-db", "pvmbg")]:
-        objects += [service(name, 5432, True), workload(name, "store", 5432, ("512Mi", "1Gi"), stateful=True, owner=owner, volume="/var/lib/postgresql", image="postgres:18.3-alpine")]
-    objects += [service("rabbitmq", 5672, True), workload("rabbitmq", "broker", 5672, ("512Mi", "1Gi"), stateful=True, volume="/var/lib/rabbitmq", image="rabbitmq:4.2.5-alpine")]
+        objects += [service(name, 5432, True), workload(name, "store", 5432, ("512Mi", "1Gi"), stateful=True, owner=owner, volume="/var/lib/postgresql", image="postgres:18.3-alpine@sha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7")]
+    objects += [service("rabbitmq", 5672, True), workload("rabbitmq", "broker", 5672, ("512Mi", "1Gi"), stateful=True, volume="/var/lib/rabbitmq", image="rabbitmq:4.2.5-alpine@sha256:d4a3806070111cc69130a6542aa4049b612789852ef11fc3862abc94631b2572")]
     for name, port in [("bmkg", 8081), ("pvmbg", 8082)]:
         objects += [service(name, port), workload(name, "mock", port, ("64Mi", "128Mi"))]
     objects += [service("auth", 8084), workload("auth", "api", 8084, ("128Mi", "256Mi"))]
     objects += [service("client-api", 8080), workload("client-api", "api", 8080, ("128Mi", "256Mi"))]
     objects += [service("aggregator", 8083), workload("aggregator", "aggregator", 8083, ("256Mi", "512Mi"), env={"SOURCE_SCHEMA_POLICY_FILE": "/etc/atlas/schema/policy.json"})]
-    for name, port in [("consumer-a", 8091), ("consumer-b", 8092)]:
+    for name, port in [("consumer-a", 8091), ("consumer-b", 8092), ("notifier", 8093)]:
         objects += [workload(name, "consumer", port, ("128Mi", "256Mi"), volume="/data"), resource("PersistentVolumeClaim", name + "-data", spec={"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}})]
     objects += [service("sensor-pantai", 8080)]
     write("base/workloads.yaml", {"apiVersion": "v1", "kind": "List", "items": objects})
@@ -110,7 +110,7 @@ def main():
     write("base/kustomization.yaml", kustomization)
     write("vendor/sensor-pantai/kustomization.yaml", {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["manifest.yaml"]})
     write("overlays/dev/kustomization.yaml", {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["../../base"], "replicas": [{"name": "canonical-store", "count": 1}], "patches": [{"target": {"kind": "StatefulSet", "name": "canonical-store"}, "patch": json.dumps([{"op": "remove", "path": "/spec/volumeClaimTemplates/0/spec/storageClassName"}])}]})
-    pin = {"target": {"kind": "Deployment", "name": "auth|client-api|bmkg|pvmbg|consumer-a|consumer-b"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"kubernetes.io/hostname": "atlas-node-a"}}])}
+    pin = {"target": {"kind": "Deployment", "name": "auth|client-api|bmkg|pvmbg|consumer-a|consumer-b|notifier"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"kubernetes.io/hostname": "atlas-node-a"}}])}
     host_addresses = ["10.0.0." + str(host) for host in [40, 41, 42]] + ["10.42." + str(subnet) + "." + str(host) for subnet in [0, 2, 4] for host in [0, 1]]
     host_patch = {"target": {"kind": "NetworkPolicy", "name": "canonical-store-owner|auth-db-owner|bmkg-db-owner|pvmbg-db-owner"}, "patch": json.dumps([{"op": "add", "path": "/spec/ingress/0/from/-", "value": {"ipBlock": {"cidr": address + "/32"}}} for address in host_addresses])}
     # The existing Proxmox Tester Agent uses host networking in dev as well.
@@ -118,7 +118,7 @@ def main():
     dev = json.loads(dev_path.read_text())
     dev["patches"].append(host_patch)
     write("overlays/dev/kustomization.yaml", dev)
-    demo = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["../../base"], "replicas": [{"name": "aggregator", "count": 3}], "patches": [pin, host_patch, {"target": {"kind": "StatefulSet", "name": "auth-db|bmkg-db|pvmbg-db|rabbitmq"}, "patch": pin["patch"]}, {"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "M2_READ_ONLY", "value": "1"}}, {"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "M2_DATA_CONFIG", "value": "/etc/atlas/data/config.json"}}, {"op": "add", "path": "/spec/template/spec/volumes/-", "value": {"name": "data-config", "secret": {"secretName": "canonical-data-config"}}}, {"op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-", "value": {"name": "data-config", "mountPath": "/etc/atlas/data", "readOnly": True}}])}]}
+    demo = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["../../base"], "replicas": [{"name": "aggregator", "count": 3}], "patches": [pin, host_patch, {"target": {"kind": "StatefulSet", "name": "auth-db|bmkg-db|pvmbg-db|rabbitmq"}, "patch": pin["patch"]}, {"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "INGESTION_DISABLED", "value": "1"}}, {"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "CLUSTER_DATA_CONFIG", "value": "/etc/atlas/data/config.json"}}, {"op": "add", "path": "/spec/template/spec/volumes/-", "value": {"name": "data-config", "secret": {"secretName": "canonical-data-config"}}}, {"op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-", "value": {"name": "data-config", "mountPath": "/etc/atlas/data", "readOnly": True}}])}]}
     demo["replicas"] += [{"name": name, "count": 2} for name in ["auth", "client-api"]]
     write("overlays/demo/kustomization.yaml", demo)
     print("Generated base and dev/demo overlays; vendor manifests preserved")

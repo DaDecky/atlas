@@ -115,14 +115,14 @@ func (c *Cluster) ApplyFieldReport(ctx context.Context, report FieldReport) (Fie
 	shard := placement.Shard("field-report:" + report.ReportID)
 
 	copies := table.Shards[shard]
-	if len(copies) != 2 || copies[0].State != "serving" || copies[1].State != "serving" {
+	if len(copies) != 2 || copies[0].State != placement.Serving || copies[1].State != placement.Serving {
 		return FieldReport{}, false, errors.New("field report requires two serving copies")
 	}
 	// A newly promoted primary may be missing an in-flight, unacknowledged row
 	// from an older placement. Prefer a durable receipt on either current copy
 	// before inserting, so an inclusive broker replay repairs that gap.
-	for _, copy := range copies {
-		node := c.Nodes[copy.Node]
+	for _, holder := range copies {
+		node := c.Nodes[holder.Node]
 		if node == nil || node.Shards[shard] == nil {
 			return FieldReport{}, false, errors.New("field report holder unavailable")
 		}
@@ -146,8 +146,8 @@ func (c *Cluster) ApplyFieldReport(ctx context.Context, report FieldReport) (Fie
 	// between copies is repaired by redelivery before acknowledging the queue.
 	inserted := false
 
-	for i, copy := range copies {
-		node := c.Nodes[copy.Node]
+	for i, holder := range copies {
+		node := c.Nodes[holder.Node]
 		if node == nil || node.Shards[shard] == nil {
 			return FieldReport{}, false, errors.New("field report holder unavailable")
 		}

@@ -20,7 +20,7 @@ import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[1]
 NS = "sistem-informasi-kebencanaan-bnpb"
-SERVICES = {"bmkg": "services/bmkg", "pvmbg": "services/pvmbg", "auth": "services/bnpb/auth", "client-api": "services/bnpb/client-api", "aggregator": "services/bnpb/aggregator", "consumer-a": "consumers/consumer-a", "consumer-b": "consumers/consumer-b"}
+SERVICES = {"bmkg": "services/bmkg", "pvmbg": "services/pvmbg", "auth": "services/bnpb/auth", "client-api": "services/bnpb/client-api", "aggregator": "services/bnpb/aggregator", "consumer-a": "consumers/consumer-a", "consumer-b": "consumers/consumer-b", "notifier": "consumers/notifier"}
 
 
 def run(args, *, payload=None, private=False, cwd=ROOT):
@@ -172,10 +172,10 @@ def main():
     config("auth-config", {"ACCESS_TOKEN_TTL": values.get("ACCESS_TOKEN_TTL", "")})
     auth["AUTH_DATABASE_URL"] = db("auth", values["AUTH_DB_PASSWORD"], "auth-db", "auth")
     secret("auth-credentials", auth)
-    aggregator = selected("BMKG_API_KEY", "PVMBG_TOKEN", "AGGREGATOR_INTERNAL_TOKEN", "AUDIT_TOKEN")
+    aggregator = selected("BMKG_API_KEY", "PVMBG_TOKEN", "AGGREGATOR_INTERNAL_TOKEN", "AUDIT_TOKEN", "PANTAI_AUTH_TOKEN")
     aggregator.update(DATABASE_URL=db("aggregator", values["CANONICAL_DB_PASSWORD"], "canonical-store-0.canonical-store", "canonical"), RABBITMQ_URL=broker)
-    settings = {"POLL_INTERVAL": values.get("POLL_INTERVAL", ""), "BMKG_BASE_URL": "http://bmkg:8081", "PVMBG_BASE_URL": "http://pvmbg:8082"}
-    for name in ["SOURCE_LEASE_DURATION", "SOURCE_LEASE_RENEW_DEADLINE", "SOURCE_LEASE_RETRY_PERIOD"]:
+    settings = {"POLL_INTERVAL": values.get("POLL_INTERVAL", ""), "BMKG_BASE_URL": "http://bmkg:8081", "PVMBG_BASE_URL": "http://pvmbg:8082", "SENSOR_PANTAI_URL": "http://sensor-pantai:8080"}
+    for name in ["SOURCE_LEASE_DURATION", "SOURCE_LEASE_RENEW_DEADLINE", "SOURCE_LEASE_RETRY_PERIOD", "SENSOR_POLL_INTERVAL", "SENSOR_TIMEOUT", "SENSOR_STALE_AFTER", "AUDIT_TIMEOUT", "OPS_CAPACITY", "SHARD_DEADLINE", "READ_HEDGE_DELAY", "SHARD_READ_WORKERS", "DATA_INGEST_POOL_SIZE", "DATA_QUERY_POOL_SIZE"]:
         if values.get(name):
             settings[name] = values[name]
     config("aggregator-config", settings)
@@ -186,13 +186,13 @@ def main():
     client.update(RABBITMQ_URL=broker)
     config("client-api-config", {"AUTH_BASE_URL": "http://auth:8084", "AGGREGATOR_BASE_URL": "http://aggregator:8083"})
     secret("client-api-credentials", client)
-    for name in ["consumer-a", "consumer-b"]:
+    for name in ["consumer-a", "consumer-b", "notifier"]:
         secret(name + "-credentials", {"AMQP_URL": broker})
     secret("pantai-token", {"token": values["PANTAI_AUTH_TOKEN"]})
     overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "namespace": NS, "resources": ["../deploy/k8s/overlays/" + args.overlay], "images": [{"name": "atlas/" + name, "newTag": args.tag} for name in SERVICES]}
     if args.enable_ingestion:
         ingest = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "aggregator"},
-                  "spec": {"template": {"spec": {"containers": [{"name": "aggregator", "env": [{"name": "M2_READ_ONLY", "value": "0"}]}]}}}}
+                  "spec": {"template": {"spec": {"containers": [{"name": "aggregator", "env": [{"name": "INGESTION_DISABLED", "value": "0"}]}]}}}}
         overlay["patches"] = [{"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps(ingest)}]
     (cache / "kustomization.yaml").write_text(json.dumps(overlay, indent=2) + "\n", encoding="utf-8")
     print("Applying", args.overlay, "overlay", flush=True)

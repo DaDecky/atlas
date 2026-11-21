@@ -25,18 +25,16 @@ type RabbitPublisher struct {
 
 type EventPublisher interface {
 	Publish(context.Context, Publication) error
+	PublishCritical(context.Context, Publication) error
 	Close()
 }
 
-type PublishWorker struct {
-	Publisher        EventPublisher
-	Pending          <-chan Publication
-	Timeout, Backoff time.Duration
-	Retries          int
-	Log              *slog.Logger
-}
-
 const Exchange = "hazard.events"
+
+const fieldAlertsQueue = "field.alerts"
+
+// fieldAlertsArgs is empty, so no broker limit ever drops a critical alert. The notifier declares the same.
+var fieldAlertsArgs amqp.Table
 
 func (p *RabbitPublisher) Close() {
 	if p.socket != nil {
@@ -55,28 +53,12 @@ func (p *RabbitPublisher) connect(ctx context.Context) error {
 
 	p.Close()
 
-	deadline, _ := ctx.Deadline()
-
-	dial := func(network, address string) (net.Conn, error) {
-		d := net.Dialer{Timeout: p.Timeout}
-
-		s, err := d.DialContext(ctx, network, address)
-		if err != nil {
-			return nil, err
-		}
-
-		p.socket = s
-		_ = s.SetDeadline(deadline)
-
-		return s, nil
-	}
-
-	conn, err := amqp.DialConfig(p.URL, amqp.Config{Heartbeat: p.Heartbeat, Dial: dial})
+	conn, socket, err := dialBroker(ctx, p.URL, p.Heartbeat, p.Timeout)
 	if err != nil {
-		p.Close()
 		return errors.New("broker connection failed")
 	}
 
+	p.socket = socket
 	p.conn = conn
 
 	ch, err := conn.Channel()
@@ -104,7 +86,7 @@ func (p *RabbitPublisher) Publish(ctx context.Context, item Publication) error {
 }
 
 func (p *RabbitPublisher) PublishCritical(ctx context.Context, item Publication) error {
-	return p.publish(ctx, item, "", "field.alerts")
+	return p.publish(ctx, item, "", fieldAlertsQueue)
 }
 
 func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchange, key string) (err error) {
@@ -150,8 +132,8 @@ func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchang
 		Body:          raw,
 	}
 
-	if key == "field.alerts" {
-		if _, err = p.channel.QueueDeclare("field.alerts", true, false, false, false, nil); err != nil {
+	if key == fieldAlertsQueue {
+		if _, err = p.channel.QueueDeclare(fieldAlertsQueue, true, false, false, false, fieldAlertsArgs); err != nil {
 			p.Close()
 			return err
 		}
@@ -177,64 +159,4 @@ func (p *RabbitPublisher) publish(ctx context.Context, item Publication, exchang
 	_ = p.socket.SetDeadline(time.Time{})
 
 	return nil
-}
-
-func (w *PublishWorker) send(ctx context.Context, item Publication) bool {
-	for attempt := 0; attempt <= w.Retries; attempt++ {
-		if ctx.Err() != nil {
-			return false
-		}
-
-		if attempt > 0 && !pause(ctx, w.Backoff*time.Duration(1<<(attempt-1))) {
-			return false
-		}
-
-		callCtx, cancel := context.WithTimeout(ctx, w.Timeout)
-		start := time.Now()
-		err := w.Publisher.Publish(callCtx, item)
-
-		cancel()
-		w.Log.Info(
-			"broker_call",
-			"correlation_id", item.CorrelationID,
-			"hazard_id", item.Event.HazardID,
-			"revision", item.Event.Revision,
-			"source", item.Event.Source,
-			"dependency", "rabbitmq",
-			"latency_ms", time.Since(start).Milliseconds(),
-			"attempt", attempt+1,
-			"confirmed", err == nil,
-		)
-
-		if err == nil {
-			return true
-		}
-	}
-
-	w.Log.Error(
-		"publication_dropped",
-		"hazard_id", item.Event.HazardID,
-		"revision", item.Event.Revision,
-		"correlation_id", item.CorrelationID,
-		"reason", "retries_exhausted",
-	)
-
-	return false
-}
-
-func (w *PublishWorker) Run(ctx context.Context) {
-	defer w.Publisher.Close()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case item, ok := <-w.Pending:
-			if !ok {
-				return
-			}
-
-			w.send(ctx, item)
-		}
-	}
 }
