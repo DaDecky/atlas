@@ -1206,9 +1206,32 @@
                   "matchLabels": {
                     "app": "aggregator"
                   }
-                }
+                },
+                "matchLabelKeys": [
+                  "pod-template-hash"
+                ]
               }
             ],
+            "affinity": {
+              "podAntiAffinity": {
+                "preferredDuringSchedulingIgnoredDuringExecution": [
+                  {
+                    "weight": 100,
+                    "podAffinityTerm": {
+                      "topologyKey": "kubernetes.io/hostname",
+                      "labelSelector": {
+                        "matchLabels": {
+                          "app": "aggregator"
+                        }
+                      },
+                      "matchLabelKeys": [
+                        "pod-template-hash"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
             "volumes": [
               {
                 "name": "schema-policy",
