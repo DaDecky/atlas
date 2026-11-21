@@ -52,7 +52,7 @@ func waitSourceRetry(ctx context.Context) bool {
 	}
 }
 
-func sourcePoller(c aggregator.Config, source string, writer *aggregator.EpochIngest, guard leadership.Guard, log *slog.Logger) (*aggregator.Poller, func()) {
+func sourcePoller(c aggregator.Config, source string, writer *aggregator.EpochIngest, guard leadership.Guard, metrics *sourceMetrics, log *slog.Logger) (*aggregator.Poller, func()) {
 	origins := map[string][2]string{
 		aggregator.SourceBMKG:  {c.BMKGURL, c.BMKGKey},
 		aggregator.SourcePVMBG: {c.PVMBGURL, c.PVMBGToken},
@@ -71,13 +71,18 @@ func sourcePoller(c aggregator.Config, source string, writer *aggregator.EpochIn
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 
-	return &aggregator.Poller{
+	poller := &aggregator.Poller{
 		Source: source, BaseURL: base, Credential: key, Interval: c.PollInterval,
 		Timeout: c.SourceTimeout, Backoff: c.Backoff, Retries: c.SourceRetries,
 		MaxRecords: c.MaxSourceRecords, MaxSourceBytes: c.MaxSourceBytes, WarningLookback: c.WarningLookback,
 		FailureMarkTimeout: c.FailureMarkTimeout, Client: client, Store: writer,
 		Log: log, PolicyFile: os.Getenv("SOURCE_SCHEMA_POLICY_FILE"), Guard: guard,
-	}, transport.CloseIdleConnections
+	}
+	if metrics != nil {
+		poller.OnPoll = metrics.recordPoll
+	}
+
+	return poller, transport.CloseIdleConnections
 }
 
 func replaySource(store runtimeData, writer *aggregator.EpochIngest, poller *aggregator.Poller, guard leadership.Guard) aggregator.ReplaySource {
@@ -102,11 +107,11 @@ func retrySourceParking(ctx context.Context, store runtimeData, writer *aggregat
 		func(err error) { log.Warn("parking_retry_failed", "source", writer.Source, "reason", err.Error()) })
 }
 
-func sourcePollWork(c aggregator.Config, store runtimeData, source string, log *slog.Logger) leadership.Work {
+func sourcePollWork(c aggregator.Config, store runtimeData, source string, metrics *sourceMetrics, log *slog.Logger) leadership.Work {
 	return func(ctx context.Context, epoch int64, guard leadership.Guard) {
 		writer := &aggregator.EpochIngest{Data: store, Source: source, WriterEpoch: epoch}
 
-		poller, closeIdle := sourcePoller(c, source, writer, guard, log)
+		poller, closeIdle := sourcePoller(c, source, writer, guard, metrics, log)
 		defer closeIdle()
 
 		term, cancel := context.WithCancel(ctx)
@@ -141,7 +146,7 @@ func sourcePollWork(c aggregator.Config, store runtimeData, source string, log *
 	}
 }
 
-func startSources(ctx context.Context, store runtimeData, c aggregator.Config, leader leadership.Leader, launch launcher, meter metric.Meter, log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
+func startSources(ctx context.Context, store runtimeData, c aggregator.Config, leader leadership.Leader, launch launcher, meter metric.Meter, metrics *sourceMetrics, log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
 	replay := map[string]aggregator.ReplaySource{}
 	if os.Getenv("INGESTION_DISABLED") == "1" {
 		return replay, nil
@@ -152,13 +157,16 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 		return nil, err
 	}
 
-	streams := map[string]leadership.Work{aggregator.SourceSatellite: sat, aggregator.SourceSensorPantai: sensorWork(c, store, log)}
+	streams := map[string]leadership.Work{aggregator.SourceSatellite: sat, aggregator.SourceSensorPantai: sensorWork(c, store, metrics, log)}
 
 	if cluster, ok := store.(*aggregator.Cluster); ok {
 		runner := leadership.NewRunner(leader, cluster, log)
+		if metrics != nil {
+			runner.OnTerm = metrics.recordLease
+		}
 
 		for _, source := range aggregator.PolledSources {
-			work := sourcePollWork(c, store, source, log)
+			work := sourcePollWork(c, store, source, metrics, log)
 
 			launch(func(ctx context.Context) { runner.Run(ctx, source, work) })
 		}
@@ -179,7 +187,7 @@ func startSources(ctx context.Context, store runtimeData, c aggregator.Config, l
 		}
 
 		writer := &aggregator.EpochIngest{Data: store, Source: source, WriterEpoch: epoch}
-		poller, closeIdle := sourcePoller(c, source, writer, nil, log)
+		poller, closeIdle := sourcePoller(c, source, writer, nil, metrics, log)
 		replay[source] = replaySource(store, writer, poller, nil)
 
 		launch(func(ctx context.Context) {

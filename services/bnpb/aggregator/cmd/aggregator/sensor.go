@@ -12,7 +12,7 @@ import (
 
 // sensorWork gives the sensor its own transport with one connection, so a slow sensor
 // cannot hold the connections or the deadline of another source.
-func sensorWork(c aggregator.Config, store runtimeData, log *slog.Logger) leadership.Work {
+func sensorWork(c aggregator.Config, store runtimeData, metrics *sourceMetrics, log *slog.Logger) leadership.Work {
 	if c.SensorURL == "" {
 		log.Info("sensor_disabled", "reason", "SENSOR_PANTAI_URL not configured")
 		return nil
@@ -27,6 +27,10 @@ func sensorWork(c aggregator.Config, store runtimeData, log *slog.Logger) leader
 
 		onChange := func(from, to string) {
 			log.Warn("sensor_breaker", "source", aggregator.SourceSensorPantai, "from", from, "to", to)
+
+			if metrics != nil {
+				metrics.recordBreaker(ctx, to)
+			}
 		}
 		client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
@@ -35,6 +39,13 @@ func sensorWork(c aggregator.Config, store runtimeData, log *slog.Logger) leader
 			Ingest:   &aggregator.EpochIngest{Data: store, Source: aggregator.SourceSensorPantai, WriterEpoch: epoch},
 			Interval: c.SensorInterval, StaleAfter: c.SensorStaleAfter, Guard: guard, Log: log,
 		}
+
+		if metrics != nil {
+			metrics.recordBreaker(ctx, "closed")
+			client.Transport = sensorTransport{RoundTripper: transport, requests: metrics.requests}
+			poller.OnPoll = metrics.recordPoll
+		}
+
 		poller.Run(ctx)
 	}
 }

@@ -20,10 +20,15 @@ import (
 // dual writes to the target without serving reads from it. Revision-conditional
 // copy cannot overwrite a newer live write. A failed live write changes the
 // placement version, so the final CAS cannot promote that failed copy.
-func (c *Cluster) Refill(ctx context.Context, shard, target string) error {
+func (c *Cluster) Refill(ctx context.Context, shard, target string) (err error) {
+	if c.OnRefill != nil {
+		started := time.Now()
+		defer func() { c.OnRefill(ctx, shard, target, time.Since(started), err) }()
+	}
+
 	var donor placement.Copy
 
-	err := placement.Update(ctx, c.Placement, func(t *placement.Table) (bool, error) {
+	err = placement.Update(ctx, c.Placement, func(t *placement.Table) (bool, error) {
 		found := false
 		donor = placement.Copy{}
 

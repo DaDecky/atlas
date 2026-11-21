@@ -59,6 +59,10 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 		r := <-results
 		switch {
 		case errors.Is(r.err, ErrStaleEpoch):
+			if c.OnStaleWrite != nil {
+				c.OnStaleWrite(ctx, source, r.holder.Node)
+			}
+
 			failures = append(failures, r.err)
 		case errors.Is(r.err, ErrStaleOffset):
 			replay = true

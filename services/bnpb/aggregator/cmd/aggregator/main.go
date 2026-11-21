@@ -50,6 +50,7 @@ func run(log *slog.Logger) error {
 		api := &aggregator.API{
 			Store: store, Token: c.InternalToken, Timeout: c.QueryTimeout,
 			Admission: aggregator.NewAdmission(c.QueryCapacity, c.FieldReservedPercent), Log: log,
+			OnAdmissionReject: otel.AdmissionRejections(log),
 		}
 		handler := otel.Handler(dataHandler(api, store, c, replay),
 			"/internal/hazards", "/internal/analytics", "/internal/analytics/summary",
@@ -84,6 +85,9 @@ func startWorkers(ctx context.Context, store runtimeData, c aggregator.Config, l
 	// The planner and the sources share one elector, so the pod holds one Kubernetes client for leases.
 	var leader leadership.Leader
 
+	startOperationMetrics(store, c, launch, meter, log)
+	metrics := newSourceMetrics(meter, log)
+
 	if cluster, ok := store.(*aggregator.Cluster); ok {
 		election, err := sourceElection(c, log)
 		if err != nil {
@@ -91,6 +95,10 @@ func startWorkers(ctx context.Context, store runtimeData, c aggregator.Config, l
 		}
 
 		leader = leaseLeader{election}
+
+		if metrics != nil {
+			cluster.OnStaleWrite = metrics.recordStaleWrite
+		}
 
 		launch(func(ctx context.Context) {
 			cluster.RunRecovery(ctx, leader, func(err error) { log.Error("refill_failed", "reason", err.Error()) })
@@ -102,9 +110,15 @@ func startWorkers(ctx context.Context, store runtimeData, c aggregator.Config, l
 	launch(func(ctx context.Context) {
 		aggregator.RunRelay(ctx, store, publisher, 200*time.Millisecond, func(err error) { log.Error("outbox_relay_failed", "reason", err.Error()) })
 	})
-	launch((&aggregator.FieldReportsConsumer{URL: c.RabbitMQURL, Heartbeat: c.BrokerHeartbeat, Store: store, Log: log}).Run)
 
-	return startSources(ctx, store, c, leader, launch, meter, log)
+	reports := &aggregator.FieldReportsConsumer{URL: c.RabbitMQURL, Heartbeat: c.BrokerHeartbeat, Store: store, Log: log}
+	if metrics != nil {
+		reports.OnApplied = metrics.recordFieldDelivery
+	}
+
+	launch(reports.Run)
+
+	return startSources(ctx, store, c, leader, launch, meter, metrics, log)
 }
 
 func newServer(c aggregator.Config, handler http.Handler) *http.Server {

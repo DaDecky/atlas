@@ -35,7 +35,10 @@ func run(log *slog.Logger) error {
 		Timeout:       cfg.OutboundTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	api := &clientapi.API{Config: cfg, Client: client, Log: log, Reports: &clientapi.RabbitReports{URL: cfg.RabbitMQURL, Timeout: cfg.OutboundTimeout}}
+	api := &clientapi.API{
+		Config: cfg, Client: client, Log: log, OnAdmissionReject: otel.AdmissionRejections(log),
+		Reports: &clientapi.RabbitReports{URL: cfg.RabbitMQURL, Timeout: cfg.OutboundTimeout},
+	}
 	server := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           otel.Handler(api.Handler(), "/hazards", "/field-reports", "/internal-ops/unprocessed", "/internal-ops/replay"),

@@ -50,6 +50,131 @@
           ]
         }
       ]
+    },
+    {
+      "panels": [
+        {
+          "title": "Capacity rejections by service and class",
+          "width": 4,
+          "expr": [
+            "sum(rate(atlas_admission_rejections_total[1m])) by (service_name, client_class)"
+          ]
+        },
+        {
+          "title": "Broker messages ready by queue",
+          "width": 4,
+          "expr": [
+            "max(atlas_broker_queue_ready and ((atlas_broker_queue_available == 1) and (time() - timestamp(atlas_broker_queue_available) < 25))) by (queue)"
+          ]
+        },
+        {
+          "title": "Field report p95 publish-to-ack (seconds)",
+          "width": 4,
+          "expr": [
+            "histogram_quantile(0.95, sum(rate(atlas_consumer_delivery_lag_seconds_bucket[5m])) by (le, queue))"
+          ]
+        }
+      ]
+    },
+    {
+      "panels": [
+        {
+          "title": "Pending outbox rows per store",
+          "width": 4,
+          "expr": [
+            "max(atlas_outbox_depth and ((atlas_outbox_available == 1) and (time() - timestamp(atlas_outbox_available) < 25))) by (store_node)"
+          ]
+        },
+        {
+          "title": "Oldest pending outbox row (seconds)",
+          "width": 4,
+          "expr": [
+            "max(clamp_min(time() - ((atlas_outbox_oldest_timestamp_seconds > 0) and ((atlas_outbox_available == 1) and (time() - timestamp(atlas_outbox_available) < 25))), 0)) by (store_node)"
+          ]
+        },
+        {
+          "title": "Refills by outcome over 5 minutes",
+          "width": 4,
+          "expr": [
+            "sum(increase(atlas_placement_refill_duration_seconds_count[5m])) by (outcome)"
+          ]
+        }
+      ]
+    },
+    {
+      "panels": [
+        {
+          "title": "Behind or refilling copies per shard",
+          "width": 4,
+          "expr": [
+            "sum(max((atlas_placement_copy_state > bool 0) * (atlas_placement_copy_state < bool 3)) by (shard, store_node)) by (shard)"
+          ]
+        },
+        {
+          "title": "Source writer epoch",
+          "width": 4,
+          "expr": [
+            "max(atlas_source_writer_epoch) by (source)"
+          ]
+        },
+        {
+          "title": "Store stale writer rejections",
+          "width": 4,
+          "expr": [
+            "sum(rate(atlas_store_stale_write_rejections_total[5m])) by (source, store_node)"
+          ]
+        }
+      ]
+    },
+    {
+      "panels": [
+        {
+          "title": "Source polls per second by outcome",
+          "width": 4,
+          "expr": [
+            "sum(rate(atlas_source_poll_duration_seconds_count[1m])) by (source, outcome)"
+          ]
+        },
+        {
+          "title": "Source poll p95 (seconds)",
+          "width": 4,
+          "expr": [
+            "histogram_quantile(0.95, sum(rate(atlas_source_poll_duration_seconds_bucket[5m])) by (le, source))"
+          ]
+        },
+        {
+          "title": "Age of last successful poll (seconds)",
+          "width": 4,
+          "expr": [
+            "clamp_min(time() - max(atlas_source_last_success_timestamp_seconds) by (source), 0)"
+          ]
+        }
+      ]
+    },
+    {
+      "panels": [
+        {
+          "title": "Active source lease holder",
+          "width": 4,
+          "expr": [
+            "(atlas_source_lease_active == 1) and (time() - timestamp(atlas_source_lease_active) < 15)"
+          ]
+        },
+        {
+          "title": "Sensor breaker (0 closed, 1 half-open, 2 open)",
+          "width": 4,
+          "expr": [
+            "max((atlas_sensor_breaker_state >= 0) and (time() - timestamp(atlas_sensor_breaker_state) < 15))"
+          ]
+        },
+        {
+          "title": "Sensor requests per second",
+          "width": 4,
+          "expr": [
+            "sum(rate(atlas_sensor_requests_total[1m]))"
+          ]
+        }
+      ]
     }
   ]
 }

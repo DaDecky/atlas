@@ -1,6 +1,7 @@
 package clientapi
 
 import (
+	"context"
 	"net/http"
 	"sync"
 )
@@ -41,9 +42,14 @@ func (a *admission) release() {
 }
 
 // admit takes a slot for the class of the caller, and answers 429 when none is left.
-func (a *API) admit(w http.ResponseWriter, claims AccessClaims) bool {
-	if a.admission.acquire(requestClass(claims) == "media") {
+func (a *API) admit(ctx context.Context, w http.ResponseWriter, claims AccessClaims) bool {
+	media := requestClass(claims) == "media"
+	if a.admission.acquire(media) {
 		return true
+	}
+
+	if a.OnAdmissionReject != nil {
+		a.OnAdmissionReject(ctx, media)
 	}
 
 	w.Header().Set("Retry-After", "1")

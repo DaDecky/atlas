@@ -25,11 +25,12 @@ type ReadStore interface {
 }
 
 type API struct {
-	Store     ReadStore
-	Token     string
-	Timeout   time.Duration
-	Admission *Admission
-	Log       *slog.Logger
+	Store             ReadStore
+	Token             string
+	Timeout           time.Duration
+	Admission         *Admission
+	OnAdmissionReject func(context.Context, bool)
+	Log               *slog.Logger
 }
 
 type statusWriter struct {
@@ -177,7 +178,12 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The Client API forwards the class it derived from the verified token.
-	if !a.Admission.acquire(r.Header.Get("X-Request-Class") == "media") {
+	media := r.Header.Get("X-Request-Class") == "media"
+	if !a.Admission.acquire(media) {
+		if a.OnAdmissionReject != nil {
+			a.OnAdmissionReject(r.Context(), media)
+		}
+
 		w.Header().Set("Retry-After", "1")
 		writeError(w, http.StatusTooManyRequests, "capacity_exceeded")
 

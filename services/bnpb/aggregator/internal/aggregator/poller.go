@@ -39,6 +39,7 @@ type Poller struct {
 	Log                         *slog.Logger
 	PolicyFile                  string
 	Guard                       func(context.Context) error
+	OnPoll                      func(context.Context, string, time.Duration, error)
 }
 
 func pause(ctx context.Context, d time.Duration) bool {
@@ -387,9 +388,14 @@ func (p *Poller) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		id := correlationID()
 		pollCtx, cancel := context.WithTimeout(ctx, p.pollBudget())
+		started := time.Now()
 		err := p.Poll(pollCtx, id)
 
 		cancel()
+
+		if p.OnPoll != nil && ctx.Err() == nil {
+			p.OnPoll(ctx, p.Source, time.Since(started), err)
+		}
 
 		if err != nil && ctx.Err() == nil {
 			failureCtx, stop := context.WithTimeout(ctx, cmp.Or(p.FailureMarkTimeout, defaultFailureMarkTimeout))

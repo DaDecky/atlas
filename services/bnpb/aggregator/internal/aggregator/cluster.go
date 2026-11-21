@@ -23,9 +23,11 @@ type DataNode struct {
 // Cluster routes writes to both holders and reads one serving copy per shard.
 // Placement snapshots are supplied by the watched repository.
 type Cluster struct {
-	Nodes     map[string]*DataNode
-	Placement placement.Repository
-	Limits    ClusterLimits
+	Nodes        map[string]*DataNode
+	Placement    placement.Repository
+	Limits       ClusterLimits
+	OnRefill     func(context.Context, string, string, time.Duration, error)
+	OnStaleWrite func(context.Context, string, string)
 }
 
 // ClusterLimits bound each copy call and the pools of each data node.

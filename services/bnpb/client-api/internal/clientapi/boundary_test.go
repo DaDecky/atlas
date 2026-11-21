@@ -1,6 +1,7 @@
 package clientapi
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -101,6 +102,9 @@ func TestAdmissionLimitDoesNotCallDependenciesAndReleasesCapacity(t *testing.T) 
 			Body:       io.NopCloser(strings.NewReader(body)),
 		}, nil
 	})
+	rejections := []bool{}
+	a.OnAdmissionReject = func(_ context.Context, media bool) { rejections = append(rejections, media) }
+
 	h := a.Handler()
 	token := testToken(t, key, "hazards:raw", time.Now().Add(time.Minute))
 	request := func() *httptest.ResponseRecorder {
@@ -125,6 +129,10 @@ func TestAdmissionLimitDoesNotCallDependenciesAndReleasesCapacity(t *testing.T) 
 	w := request()
 	if w.Code != 429 || w.Header().Get("Retry-After") != "1" {
 		t.Fatalf("overload=%d %s", w.Code, w.Body)
+	}
+
+	if len(rejections) != 1 || rejections[0] {
+		t.Fatalf("unexpected capacity rejection classes: %v", rejections)
 	}
 
 	close(release)

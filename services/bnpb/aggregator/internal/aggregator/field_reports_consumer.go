@@ -14,6 +14,7 @@ type FieldReportsConsumer struct {
 	Heartbeat time.Duration
 	Store     FieldReportStore
 	Log       *slog.Logger
+	OnApplied func(context.Context, time.Time)
 }
 
 const FieldReportsQueue = "field.reports"
@@ -90,6 +91,10 @@ func (c *FieldReportsConsumer) session(ctx context.Context) error {
 
 			if err = delivery.Ack(false); err != nil {
 				return err
+			}
+
+			if c.OnApplied != nil {
+				c.OnApplied(ctx, delivery.Timestamp)
 			}
 
 			c.Log.Info("field_report_applied", "report_id", delivery.MessageId, "correlation_id", delivery.CorrelationId)

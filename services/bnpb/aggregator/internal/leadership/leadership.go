@@ -34,6 +34,7 @@ type Runner struct {
 	Leader Leader
 	Writer Writer
 	Log    *slog.Logger
+	OnTerm func(context.Context, string, bool)
 	// CheckEvery bounds how long a lost term can keep working without a write.
 	CheckEvery, CheckTimeout, BootstrapTimeout, RetryDelay time.Duration
 }
@@ -74,6 +75,11 @@ func (r *Runner) term(ctx context.Context, source string, work Work) error {
 	epoch, err := r.bootstrap(lifetime, source, guard)
 	if err != nil {
 		return err
+	}
+
+	if r.OnTerm != nil {
+		r.OnTerm(ctx, source, true)
+		defer r.OnTerm(ctx, source, false)
 	}
 
 	r.Log.Info("source_writer_ready", "source", source, "epoch", epoch)
