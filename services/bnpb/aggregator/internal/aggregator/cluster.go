@@ -27,6 +27,9 @@ type Cluster struct {
 	Nodes     map[string]*DataNode
 	Placement placement.Repository
 	Limits    ClusterLimits
+
+	readSlotsOnce sync.Once
+	readSlots     chan struct{}
 }
 
 // ClusterLimits bound each copy call and the pools of each data node.
@@ -389,6 +392,15 @@ func (c *Cluster) LoadState(ctx context.Context, source string) (StreamState, er
 	return *state, nil
 }
 
+// shardReadSlots bounds concurrent shard reads across requests on this replica.
+func (c *Cluster) shardReadSlots() chan struct{} {
+	c.readSlotsOnce.Do(func() {
+		c.readSlots = make(chan struct{}, max(1, c.Limits.ReadWorkers, len(c.Nodes)*int(c.Limits.QueryPool)))
+	})
+
+	return c.readSlots
+}
+
 // fanout reads every shard from one serving copy and names the shards it could not read.
 func fanout[T any](ctx context.Context, c *Cluster, read func(context.Context, *Store) ([]T, error)) ([]T, []string, error) {
 	t, _, err := c.Placement.Load(ctx)
@@ -403,7 +415,8 @@ func fanout[T any](ctx context.Context, c *Cluster, read func(context.Context, *
 
 	events := []T{}
 	unavailable := []string{}
-	sem := make(chan struct{}, c.Limits.ReadWorkers)
+	sem := make(chan struct{}, max(1, c.Limits.ReadWorkers))
+	shared := c.shardReadSlots()
 
 	for shard, copies := range t.Shards {
 		wg.Go(func() {
@@ -419,6 +432,19 @@ func fanout[T any](ctx context.Context, c *Cluster, read func(context.Context, *
 			}
 
 			defer func() { <-sem }()
+
+			select {
+			case shared <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+
+				unavailable = append(unavailable, shard)
+				mu.Unlock()
+
+				return
+			}
+
+			defer func() { <-shared }()
 
 			rows, err := readCopies(ctx, c, copies, shard, read)
 			if err == nil {
@@ -444,7 +470,8 @@ func fanout[T any](ctx context.Context, c *Cluster, read func(context.Context, *
 }
 
 func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
-	if _, err := decodeCursor(q); err != nil {
+	cursor, err := decodeCursor(q)
+	if err != nil {
 		return Response{}, err
 	}
 
@@ -452,19 +479,9 @@ func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
 		return Response{}, errors.New("invalid limit")
 	}
 
-	more := false
-
-	var mu sync.Mutex
-
+	freshness := c.readFreshness(ctx, q)
 	rows, missing, err := fanout(ctx, c, func(ctx context.Context, s *Store) ([]HazardEvent, error) {
-		r, err := s.Read(ctx, q)
-		if r.NextCursor != nil {
-			mu.Lock()
-			more = true
-			mu.Unlock()
-		}
-
-		return r.Data, err
+		return s.readShardPage(ctx, q, cursor)
 	})
 
 	out := Response{Data: []HazardEvent{}, Sources: []Freshness{}, Partial: len(missing) > 0, UnavailableUnits: missing}
@@ -475,42 +492,66 @@ func (c *Cluster) Read(ctx context.Context, q Query) (Response, error) {
 	sortEvents(rows, q.Audit)
 
 	if len(rows) > q.Limit {
-		more = true
 		rows = rows[:q.Limit]
-	}
-
-	out.Data = rows
-	if more && len(rows) > 0 {
 		next := encodeCursor(q, rows[len(rows)-1])
 		out.NextCursor = &next
 	}
 
-	for _, source := range sources(q) {
-		fresh, err := readMetadata(ctx, c, source, func(call context.Context, store *Store) (Freshness, error) {
-			fresh := Freshness{Source: source, Status: "unavailable"}
-
-			tx, err := store.begin(call, true)
-			if err != nil {
-				return fresh, err
-			}
-			defer tx.Rollback(call)
-
-			err = tx.QueryRow(call, `SELECT last_success_at,stale_since FROM source_progress WHERE source=$1`, source).Scan(&fresh.LastSuccessAt, &fresh.StaleSince)
-			if err == nil {
-				// The events sit in 48 shards, so a source that never succeeded counts as having none.
-				fresh.Status = deriveFreshness(fresh.LastSuccessAt, fresh.StaleSince, fresh.LastSuccessAt != nil)
-			}
-
-			return fresh, err
-		})
-		if err != nil {
-			fresh = Freshness{Source: source, Status: "unavailable"}
-		}
-
-		out.Sources = append(out.Sources, fresh)
-	}
+	out.Data = rows
+	out.Sources = freshness
 
 	return out, nil
+}
+
+// Use a bounded metadata phase before the event reads. A slow shard can
+// consume the remaining request budget without hiding a healthy source.
+func (c *Cluster) readFreshness(ctx context.Context, q Query) []Freshness {
+	budget := c.Limits.ShardDeadline + c.Limits.HedgeDelay
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)/3)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	names := sources(q)
+	result := make([]Freshness, len(names))
+
+	var wg sync.WaitGroup
+	for i, source := range names {
+		wg.Go(func() {
+			fresh, err := readMetadata(ctx, c, source, func(call context.Context, store *Store) (Freshness, error) {
+				return store.sourceFreshness(call, source)
+			})
+			if err != nil {
+				fresh = Freshness{Source: source, Status: "unavailable"}
+			}
+
+			result[i] = fresh
+		})
+	}
+
+	wg.Wait()
+
+	return result
+}
+
+func (s *Store) sourceFreshness(ctx context.Context, source string) (Freshness, error) {
+	fresh := Freshness{Source: source, Status: "unavailable"}
+
+	tx, err := s.begin(ctx, true)
+	if err != nil {
+		return fresh, err
+	}
+	defer tx.Rollback(ctx)
+
+	err = tx.QueryRow(ctx, `SELECT last_success_at,stale_since FROM source_progress WHERE source=$1`, source).Scan(&fresh.LastSuccessAt, &fresh.StaleSince)
+	if err == nil {
+		// Event rows span shards. Last success marks a source that has been ingested.
+		fresh.Status = deriveFreshness(fresh.LastSuccessAt, fresh.StaleSince, fresh.LastSuccessAt != nil)
+	}
+
+	return fresh, err
 }
 
 func sortEvents(rows []HazardEvent, audit bool) {

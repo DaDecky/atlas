@@ -7,10 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
@@ -563,5 +567,59 @@ func TestDataIntegrationConcurrentWritersDoNotStarveIngestionPool(t *testing.T) 
 	checksum, err := c.Checksum(ctx, "BMKG")
 	if err != nil || checksum.Count != 8 {
 		t.Fatal(checksum, err)
+	}
+}
+
+func TestDataIntegrationReadPreservesFreshnessWhenShardQueriesExpire(t *testing.T) {
+	cluster := dataCluster(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+
+	now := time.Now().UTC()
+
+	batch := WriteBatch{
+		Source: SourceBMKG, Epoch: 1, Now: now,
+		Events: []HazardEvent{contractEvent(SourceBMKG, "read-deadline", now)},
+	}
+	if _, err := cluster.CommitCheckpoint(ctx, batch, now); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, node := range cluster.Nodes {
+		tx, err := node.Store.ingest.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(context.Background())
+
+		tables := make([]string, 0, len(node.Shards))
+		for _, shard := range node.Shards {
+			tables = append(tables, pgx.Identifier{shard.namespace, "hazard_events"}.Sanitize())
+		}
+
+		if _, err = tx.Exec(ctx, `LOCK TABLE `+strings.Join(tables, ",")+` IN ACCESS EXCLUSIVE MODE`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	api := &API{
+		Store: cluster, Token: "test-internal", Timeout: 600 * time.Millisecond,
+		Admission: NewAdmission(4, 0), Log: testLog(),
+	}
+
+	response := request(api.Handler(), "/internal/hazards?source=BMKG&limit=20", "test-internal")
+	if response.Code != http.StatusOK {
+		t.Fatalf("got %d, want 200 with partial data: %s", response.Code, response.Body)
+	}
+
+	var got Response
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+
+	if !got.Partial || len(got.UnavailableUnits) != placement.Shards ||
+		len(got.Sources) != 1 || got.Sources[0].Status != "healthy" {
+		t.Fatalf("missing partial marker or healthy source: %+v", got)
 	}
 }
