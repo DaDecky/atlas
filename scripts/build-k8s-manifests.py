@@ -86,7 +86,11 @@ def main():
         objects += [service(name, 5432, True), workload(name, "store", 5432, ("512Mi", "1Gi"), stateful=True, owner=owner, volume="/var/lib/postgresql", image="postgres:18.3-alpine")]
     objects += [service("rabbitmq", 5672, True), workload("rabbitmq", "broker", 5672, ("512Mi", "1Gi"), stateful=True, volume="/var/lib/rabbitmq", image="rabbitmq:4.2.5-alpine")]
     for name, port in [("bmkg", 8081), ("pvmbg", 8082)]:
-        objects += [service(name, port), workload(name, "mock", port, ("64Mi", "128Mi"))]
+        mock_service = service(name, port)
+        if name == "pvmbg":
+            # Tester Agent discovers the schema admin endpoint through the Service label.
+            mock_service["metadata"]["labels"] = {"role": "mock"}
+        objects += [mock_service, workload(name, "mock", port, ("64Mi", "128Mi"))]
     objects += [service("auth", 8084), workload("auth", "api", 8084, ("128Mi", "256Mi"))]
     objects += [service("client-api", 8080), workload("client-api", "api", 8080, ("128Mi", "256Mi"))]
     objects += [service("aggregator", 8083), workload("aggregator", "aggregator", 8083, ("256Mi", "512Mi"), env={"SOURCE_SCHEMA_POLICY_FILE": "/etc/atlas/schema/policy.json"})]
