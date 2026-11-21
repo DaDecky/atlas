@@ -652,7 +652,10 @@
       "apiVersion": "v1",
       "kind": "Service",
       "metadata": {
-        "name": "pvmbg"
+        "name": "pvmbg",
+        "labels": {
+          "role": "mock"
+        }
       },
       "spec": {
         "selector": {
