@@ -1128,6 +1128,10 @@
                   {
                     "name": "SOURCE_SCHEMA_POLICY_FILE",
                     "value": "/etc/atlas/schema/policy.json"
+                  },
+                  {
+                    "name": "GOMEMLIMIT",
+                    "value": "384MiB"
                   }
                 ],
                 "envFrom": [

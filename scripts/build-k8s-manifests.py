@@ -89,7 +89,7 @@ def main():
         objects += [service(name, port), workload(name, "mock", port, ("64Mi", "128Mi"))]
     objects += [service("auth", 8084), workload("auth", "api", 8084, ("128Mi", "256Mi"))]
     objects += [service("client-api", 8080), workload("client-api", "api", 8080, ("128Mi", "256Mi"))]
-    objects += [service("aggregator", 8083), workload("aggregator", "aggregator", 8083, ("256Mi", "512Mi"), env={"SOURCE_SCHEMA_POLICY_FILE": "/etc/atlas/schema/policy.json"})]
+    objects += [service("aggregator", 8083), workload("aggregator", "aggregator", 8083, ("256Mi", "512Mi"), env={"SOURCE_SCHEMA_POLICY_FILE": "/etc/atlas/schema/policy.json", "GOMEMLIMIT": "384MiB"})]
     for name, port in [("consumer-a", 8091), ("consumer-b", 8092), ("notifier", 8093)]:
         objects += [workload(name, "consumer", port, ("128Mi", "256Mi"), volume="/data"), resource("PersistentVolumeClaim", name + "-data", spec={"accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "1Gi"}}})]
     objects += [service("sensor-pantai", 8080)]

@@ -171,7 +171,7 @@ func (c *Cluster) failureEpoch(ctx context.Context, source string, now time.Time
 		return ErrStaleEpoch
 	}
 
-	_, err = c.replicate(ctx, t, placement.Shard("metadata:"+source), source, epoch, func(call context.Context, s *Store) ([]HazardEvent, error) {
+	_, err = c.replicate(ctx, t, placement.Shard("metadata:"+source), source, epoch, 0, func(call context.Context, s *Store) ([]HazardEvent, error) {
 		return nil, s.failureEpoch(call, source, now, epoch)
 	})
 

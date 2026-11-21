@@ -27,12 +27,15 @@ func (s *SatelliteSink) Load(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 
-	engine, err := satellite.Restore(state.Payload)
-	if err != nil {
-		return nil, err
+	// The runner restores and validates the engine. Check the checkpoint
+	// position here without allocating a second spatial index.
+	var header struct {
+		Version   int   `json:"version"`
+		Offset    int64 `json:"offset"`
+		HasOffset bool  `json:"has_offset"`
 	}
 
-	if offset, hasOffset := engine.Position(); !hasOffset || offset != state.Offset {
+	if err := json.Unmarshal(state.Payload, &header); err != nil || header.Version != 1 || !header.HasOffset || header.Offset != state.Offset {
 		return nil, errors.New("satellite offset and state disagree")
 	}
 
