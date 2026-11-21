@@ -21,7 +21,7 @@ type readResult[T any] struct {
 
 // Each copy has its own deadline. A failed copy is fenced out of reads before
 // acknowledging a degraded write, including failures while parking a message.
-func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, source string, epoch int64, write func(context.Context, *Store) ([]HazardEvent, error)) ([]HazardEvent, error) {
+func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, source string, epoch int64, deadline time.Duration, write func(context.Context, *Store) ([]HazardEvent, error)) ([]HazardEvent, error) {
 	results := make(chan copyResult, len(t.Shards[shard]))
 	pending := 0
 
@@ -33,12 +33,14 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 		pending++
 
 		go func() {
-			call, cancel := c.timeout(ctx)
-			defer cancel()
-
 			result := copyResult{holder: holder, err: errors.New("copy node unavailable")}
 			if c.Nodes[holder.Node] != nil {
-				result.events, result.err = write(call, c.copyStore(holder, shard))
+				store := c.copyStore(holder, shard)
+
+				call, cancel := c.copyContext(ctx, store, deadline)
+				defer cancel()
+
+				result.events, result.err = write(call, store)
 			}
 
 			results <- result
@@ -57,6 +59,10 @@ func (c *Cluster) replicate(ctx context.Context, t placement.Table, shard, sourc
 		r := <-results
 		switch {
 		case errors.Is(r.err, ErrStaleEpoch):
+			if c.OnStaleWrite != nil {
+				c.OnStaleWrite(ctx, source, r.holder.Node)
+			}
+
 			failures = append(failures, r.err)
 		case errors.Is(r.err, ErrStaleOffset):
 			replay = true
@@ -104,7 +110,7 @@ func (c *Cluster) markFailedCopy(ctx context.Context, shard, source string, epoc
 
 // Results belong to individual attempts; a canceled loser never mutates the
 // winner's output. A buffered channel lets losing database calls finish safely.
-func readCopies[T any](ctx context.Context, c *Cluster, copies []placement.Copy, shard string, read func(context.Context, *Store) (T, error)) (T, error) {
+func readCopies[T any](ctx context.Context, c *Cluster, copies []placement.Copy, shard string, deadline time.Duration, read func(context.Context, *Store) (T, error)) (T, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -131,7 +137,7 @@ func readCopies[T any](ctx context.Context, c *Cluster, copies []placement.Copy,
 		started++
 
 		go func() {
-			call, stop := c.timeout(ctx)
+			call, stop := c.copyContext(ctx, store, deadline)
 			defer stop()
 
 			value, err := read(call, store)
@@ -180,5 +186,14 @@ func readMetadata[T any](ctx context.Context, c *Cluster, source string, read fu
 
 	shard := placement.Shard("metadata:" + source)
 
-	return readCopies(ctx, c, t.Shards[shard], shard, read)
+	return readCopies(ctx, c, t.Shards[shard], shard, 0, read)
+}
+
+func (c *Cluster) copyContext(ctx context.Context, store *Store, deadline time.Duration) (context.Context, context.CancelFunc) {
+	if deadline > 0 {
+		store.deadline = deadline
+		return context.WithTimeout(ctx, deadline)
+	}
+
+	return c.timeout(ctx)
 }

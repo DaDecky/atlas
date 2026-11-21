@@ -109,7 +109,7 @@ func (a *API) fieldReports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !a.admit(w, claims) {
+	if !a.admit(r.Context(), w, claims) {
 		return
 	}
 	defer a.admission.release()

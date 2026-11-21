@@ -138,7 +138,7 @@ func (c *Cluster) existingIngestedAt(ctx context.Context, events []HazardEvent) 
 	found := map[string]time.Time{}
 
 	for shard, ids := range byShard {
-		times, err := readCopies(ctx, c, t.Shards[shard], shard, func(call context.Context, s *Store) (map[string]time.Time, error) {
+		times, err := readCopies(ctx, c, t.Shards[shard], shard, 0, func(call context.Context, s *Store) (map[string]time.Time, error) {
 			return s.ingestedAt(call, ids)
 		})
 		if err != nil {

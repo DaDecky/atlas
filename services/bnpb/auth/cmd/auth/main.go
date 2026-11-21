@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/DaDecky/atlas/services/bnpb/telemetry"
+
 	"atlas/services/bnpb/auth/internal/auth"
 )
 
@@ -20,6 +22,9 @@ func run(log *slog.Logger) error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	otel := telemetry.Start(ctx, "auth", log)
+	defer otel.Close(log)
 
 	startup, stop := context.WithTimeout(ctx, cfg.StartupTimeout)
 
@@ -48,7 +53,7 @@ func run(log *slog.Logger) error {
 	}
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           api.Handler(),
+		Handler:           otel.Handler(api.Handler(), "/auth/login", "/auth/refresh", "/auth/validate"),
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 		ReadTimeout:       cfg.HTTPReadTimeout,
 		WriteTimeout:      cfg.HTTPWriteTimeout,

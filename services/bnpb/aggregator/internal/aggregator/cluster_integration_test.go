@@ -142,6 +142,21 @@ func TestDataIntegrationDualWriteWipeRefillAndNextLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	pending := int64(0)
+
+	for _, node := range c.Nodes {
+		depth, oldest, err := node.Store.OutboxStats(ctx)
+		if err != nil || depth > 0 && oldest <= 0 {
+			t.Fatal("invalid pending outbox snapshot", depth, oldest, err)
+		}
+
+		pending += depth
+	}
+
+	if pending == 0 {
+		t.Fatal("new events did not appear in outbox measurements")
+	}
+
 	physical := int64(0)
 
 	for _, m := range metrics {
@@ -208,14 +223,31 @@ func TestDataIntegrationDualWriteWipeRefillAndNextLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	observed := 0
+	c.OnRefill = func(_ context.Context, shard, node string, elapsed time.Duration, err error) {
+		if shard == "" || node != "b" || elapsed <= 0 || err != nil {
+			t.Errorf("invalid refill telemetry: %s %s %s %v", shard, node, elapsed, err)
+		}
+
+		observed++
+	}
+
+	expected := 0
+
 	for shard, copies := range table.Shards {
 		for _, copy := range copies {
 			if copy.Node == "b" {
+				expected++
+
 				if err = c.Refill(ctx, shard, "b"); err != nil {
 					t.Fatal("refill", shard, err)
 				}
 			}
 		}
+	}
+
+	if observed == 0 || observed != expected {
+		t.Fatalf("observed %d refills, expected %d", observed, expected)
 	}
 
 	a := c.Nodes["a"]

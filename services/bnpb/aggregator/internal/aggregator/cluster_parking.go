@@ -41,7 +41,7 @@ func (c *Cluster) park(ctx context.Context, m ParkedMessage, epoch int64) error 
 	}
 
 	shard := placement.Shard("metadata:" + m.Source)
-	_, err = c.replicate(ctx, t, shard, m.Source, epoch, func(call context.Context, s *Store) ([]HazardEvent, error) {
+	_, err = c.replicate(ctx, t, shard, m.Source, epoch, 0, func(call context.Context, s *Store) ([]HazardEvent, error) {
 		return nil, s.park(call, m, epoch)
 	})
 
@@ -315,7 +315,7 @@ func (c *Cluster) event(ctx context.Context, id string) (HazardEvent, error) {
 
 	shard := placement.Shard(id)
 
-	event, err := readCopies(ctx, c, t.Shards[shard], shard, func(call context.Context, s *Store) (*HazardEvent, error) {
+	event, err := readCopies(ctx, c, t.Shards[shard], shard, 0, func(call context.Context, s *Store) (*HazardEvent, error) {
 		tx, err := s.begin(call, true)
 		if err != nil {
 			return nil, err

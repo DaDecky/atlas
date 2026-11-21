@@ -24,6 +24,7 @@ type SensorPoller struct {
 	Interval, StaleAfter time.Duration
 	Guard                func(context.Context) error
 	Log                  *slog.Logger
+	OnPoll               func(context.Context, string, time.Duration, error)
 	stations             map[string]sensor.Station
 }
 
@@ -63,7 +64,13 @@ func (p *SensorPoller) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		id := correlationID()
 
+		started := time.Now()
+
 		more, err := p.Poll(ctx, id)
+		if p.OnPoll != nil && ctx.Err() == nil {
+			p.OnPoll(ctx, SourceSensorPantai, time.Since(started), err)
+		}
+
 		if errors.Is(err, ErrStaleEpoch) {
 			return
 		}

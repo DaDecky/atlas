@@ -7,14 +7,17 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"go.opentelemetry.io/otel/metric"
 
 	"atlas/services/bnpb/aggregator/internal/aggregator"
 	"atlas/services/bnpb/aggregator/internal/leadership"
 	"atlas/services/bnpb/aggregator/internal/satellite"
 )
 
-func satelliteWork(store runtimeData, log *slog.Logger) (leadership.Work, error) {
+func satelliteWork(store runtimeData, meter metric.Meter, log *slog.Logger) (leadership.Work, error) {
 	token := os.Getenv("SATELLITE_TOKEN")
 	if path := os.Getenv("SATELLITE_TOKEN_FILE"); path != "" {
 		raw, err := os.ReadFile(path)
@@ -48,6 +51,14 @@ func satelliteWork(store runtimeData, log *slog.Logger) (leadership.Work, error)
 		origin = "https://satellite.naufarrel.dev"
 	}
 
+	var observe func(context.Context, satellite.CommitInfo)
+	if meter != nil {
+		observe, err = satelliteObserver(meter)
+		if err != nil {
+			log.Warn("satellite_metric_init_failed")
+		}
+	}
+
 	return func(ctx context.Context, epoch int64, termGuard leadership.Guard) {
 		sink := &aggregator.SatelliteSink{Data: store, Epoch: epoch, Reference: ref}
 		guard := func(ctx context.Context) error {
@@ -58,6 +69,18 @@ func satelliteWork(store runtimeData, log *slog.Logger) (leadership.Work, error)
 			}
 
 			return sink.Guard(ctx)
+		}
+
+		if meter != nil {
+			samplingCtx, cancel := context.WithCancel(ctx)
+
+			var sampler sync.WaitGroup
+			sampler.Go(func() { sampleSatelliteSession(samplingCtx, strings.TrimRight(origin, "/"), token, meter, log) })
+
+			defer func() {
+				cancel()
+				sampler.Wait()
+			}()
 		}
 
 		log.Info("satellite_configured", "province_reference", ref.Version, "writer_epoch", epoch)
@@ -73,6 +96,10 @@ func satelliteWork(store runtimeData, log *slog.Logger) (leadership.Work, error)
 			Client:  &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 			OnError: func(err error) { log.Warn("satellite_reconnect", "reason", err.Error()) },
 			OnCommit: func(info satellite.CommitInfo) {
+				if observe != nil {
+					observe(ctx, info)
+				}
+
 				latencies := make([]float64, len(info.Latencies))
 				for i, value := range info.Latencies {
 					latencies[i] = float64(value.Microseconds()) / 1000

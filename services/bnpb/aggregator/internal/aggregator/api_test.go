@@ -122,6 +122,9 @@ func TestAPIAuthenticationQueriesAndFreshness(t *testing.T) {
 func TestAPIAdmissionAndDeadline(t *testing.T) {
 	s := &readStub{wait: true, entered: make(chan struct{}, 1)}
 	a := &API{Store: s, Token: "test-internal", Timeout: 60 * time.Millisecond, Admission: NewAdmission(1, 0), Log: testLog()}
+	rejections := []bool{}
+	a.OnAdmissionReject = func(_ context.Context, media bool) { rejections = append(rejections, media) }
+
 	h := a.Handler()
 
 	done := make(chan *httptest.ResponseRecorder, 1)
@@ -131,6 +134,10 @@ func TestAPIAdmissionAndDeadline(t *testing.T) {
 
 	if w := request(h, "/internal/hazards", "test-internal"); w.Code != 429 || w.Header().Get("Retry-After") != "1" {
 		t.Fatal(w)
+	}
+
+	if len(rejections) != 1 || rejections[0] {
+		t.Fatalf("unexpected capacity rejection classes: %v", rejections)
 	}
 
 	select {

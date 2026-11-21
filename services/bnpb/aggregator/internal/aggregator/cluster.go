@@ -2,7 +2,6 @@ package aggregator
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -24,10 +23,11 @@ type DataNode struct {
 // Cluster routes writes to both holders and reads one serving copy per shard.
 // Placement snapshots are supplied by the watched repository.
 type Cluster struct {
-	Nodes     map[string]*DataNode
-	Placement placement.Repository
-	Limits    ClusterLimits
-
+	Nodes         map[string]*DataNode
+	Placement     placement.Repository
+	Limits        ClusterLimits
+	OnRefill      func(context.Context, string, string, time.Duration, error)
+	OnStaleWrite  func(context.Context, string, string)
 	readSlotsOnce sync.Once
 	readSlots     chan struct{}
 }
@@ -300,8 +300,8 @@ func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time
 	}
 
 	if state != nil {
-		prior, err := c.LoadState(ctx, b.Source)
-		if err == nil && prior.Offset >= state.Offset {
+		_, prior, err := c.streamStateHolders(ctx, table, b.Source)
+		if err == nil && prior >= state.Offset {
 			return nil, ErrStaleOffset
 		}
 
@@ -356,15 +356,16 @@ func (c *Cluster) write(ctx context.Context, b WriteBatch, checkpoint *time.Time
 }
 
 func (c *Cluster) writeCopies(ctx context.Context, t placement.Table, shard string, b WriteBatch, cp *time.Time, state *StreamState) ([]HazardEvent, error) {
-	return c.replicate(ctx, t, shard, b.Source, b.Epoch, func(call context.Context, s *Store) ([]HazardEvent, error) {
-		switch {
-		case state != nil:
-			return s.CommitState(call, b, *state)
-		case cp != nil:
+	if state != nil {
+		return c.commitStreamCopies(ctx, t, shard, b, *state)
+	}
+
+	return c.replicate(ctx, t, shard, b.Source, b.Epoch, 0, func(call context.Context, s *Store) ([]HazardEvent, error) {
+		if cp != nil {
 			return s.CommitCheckpoint(call, b, *cp)
-		default:
-			return s.Upsert(call, b)
 		}
+
+		return s.Upsert(call, b)
 	})
 }
 
@@ -373,23 +374,19 @@ func (c *Cluster) Checkpoint(ctx context.Context, source string) (*time.Time, er
 }
 
 func (c *Cluster) LoadState(ctx context.Context, source string) (StreamState, error) {
-	state, err := readMetadata(ctx, c, source, func(call context.Context, s *Store) (*StreamState, error) {
-		value, err := s.LoadState(call, source)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-
-		return &value, err
-	})
+	table, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return StreamState{}, err
 	}
 
-	if state == nil {
-		return StreamState{}, pgx.ErrNoRows
+	holders, _, err := c.streamStateHolders(ctx, table, source)
+	if err != nil {
+		return StreamState{}, err
 	}
 
-	return *state, nil
+	return readCopies(ctx, c, holders, placement.Shard("metadata:"+source), streamStateDeadline, func(call context.Context, store *Store) (StreamState, error) {
+		return store.LoadState(call, source)
+	})
 }
 
 // shardReadSlots bounds concurrent shard reads across requests on this replica.
@@ -446,7 +443,7 @@ func fanout[T any](ctx context.Context, c *Cluster, read func(context.Context, *
 
 			defer func() { <-shared }()
 
-			rows, err := readCopies(ctx, c, copies, shard, read)
+			rows, err := readCopies(ctx, c, copies, shard, 0, read)
 			if err == nil {
 				mu.Lock()
 
@@ -625,11 +622,8 @@ func checkWrite(b WriteBatch, checkpoint *time.Time, state *StreamState) error {
 		return errors.New("checkpoint required")
 	}
 
-	if state != nil {
-		var object map[string]json.RawMessage
-		if state.Offset < 0 || json.Unmarshal(state.Payload, &object) != nil || object == nil {
-			return errors.New("invalid stream state")
-		}
+	if state != nil && !state.valid() {
+		return errors.New("invalid stream state")
 	}
 
 	return nil

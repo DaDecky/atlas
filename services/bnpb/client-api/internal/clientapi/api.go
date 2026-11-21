@@ -19,12 +19,13 @@ import (
 )
 
 type API struct {
-	Config        Config
-	Client        *http.Client
-	Log           *slog.Logger
-	Reports       ReportPublisher
-	admission     *admission
-	admissionOnce sync.Once
+	Config            Config
+	Client            *http.Client
+	Log               *slog.Logger
+	Reports           ReportPublisher
+	OnAdmissionReject func(context.Context, bool)
+	admission         *admission
+	admissionOnce     sync.Once
 }
 
 type validateRequest struct {
@@ -443,7 +444,7 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !a.admit(w, claims) {
+	if !a.admit(r.Context(), w, claims) {
 		return
 	}
 	defer a.admission.release()
