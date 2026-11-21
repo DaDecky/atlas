@@ -580,11 +580,8 @@ func checkWrite(b WriteBatch, checkpoint *time.Time, state *StreamState) error {
 		return errors.New("checkpoint required")
 	}
 
-	if state != nil {
-		var object map[string]json.RawMessage
-		if state.Offset < 0 || json.Unmarshal(state.Payload, &object) != nil || object == nil {
-			return errors.New("invalid stream state")
-		}
+	if state != nil && !state.valid() {
+		return errors.New("invalid stream state")
 	}
 
 	return nil

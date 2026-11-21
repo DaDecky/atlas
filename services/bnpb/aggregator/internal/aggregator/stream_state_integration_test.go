@@ -1,3 +1,5 @@
+//go:build integration
+
 package aggregator
 
 import (
@@ -59,7 +61,7 @@ func TestDataIntegrationStreamStateUsesNewestServingOffset(t *testing.T) {
 
 func TestDataIntegrationLargeStreamStateHasDedicatedDeadline(t *testing.T) {
 	cluster := dataCluster(t)
-	cluster.Deadline = shardDeadline
+	cluster.Limits.ShardDeadline = DefaultClusterLimits().ShardDeadline
 
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
