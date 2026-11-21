@@ -115,7 +115,12 @@ def main():
         def build(item):
             name, folder = item
             print("Building", name, flush=True)
-            result = subprocess.run(["docker", "build", "-t", "atlas/" + name + ":" + args.tag, folder], cwd=ROOT, capture_output=True)
+            command = ["docker", "build", "-t", "atlas/" + name + ":" + args.tag]
+            if folder.startswith("services/bnpb/"):
+                command += ["-f", folder + "/Dockerfile", "services/bnpb"]
+            else:
+                command.append(folder)
+            result = subprocess.run(command, cwd=ROOT, capture_output=True)
             (cache / ("build-" + name + ".log")).write_bytes(result.stdout + result.stderr)
             if result.returncode:
                 raise RuntimeError("image build failed: " + name + "; see ignored build log")
@@ -191,12 +196,25 @@ def main():
         secret(name + "-credentials", {"AMQP_URL": broker})
     secret("pantai-token", {"token": values["PANTAI_AUTH_TOKEN"]})
     overlay = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "namespace": NS, "resources": ["../deploy/k8s/overlays/" + args.overlay], "images": [{"name": "atlas/" + name, "newTag": args.tag} for name in SERVICES]}
+    patches = []
     if args.enable_telemetry:
         overlay["resources"].append("../deploy/k8s/telemetry")
+        env = [
+            {"name": "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "value": "http://jaeger:4318/v1/traces"},
+            {"name": "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "value": "http://victoriametrics:8428/opentelemetry/v1/metrics"},
+            {"name": "OTEL_TRACES_SAMPLER", "value": "parentbased_traceidratio"},
+            {"name": "OTEL_TRACES_SAMPLER_ARG", "value": "0.1"},
+        ]
+        for name in ["aggregator", "auth", "client-api"]:
+            telemetry = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": name},
+                         "spec": {"template": {"spec": {"containers": [{"name": name, "env": env}]}}}}
+            patches.append({"target": {"kind": "Deployment", "name": name}, "patch": json.dumps(telemetry)})
     if args.enable_ingestion:
         ingest = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "aggregator"},
                   "spec": {"template": {"spec": {"containers": [{"name": "aggregator", "env": [{"name": "INGESTION_DISABLED", "value": "0"}]}]}}}}
-        overlay["patches"] = [{"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps(ingest)}]
+        patches.append({"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps(ingest)})
+    if patches:
+        overlay["patches"] = patches
     (cache / "kustomization.yaml").write_text(json.dumps(overlay, indent=2) + "\n", encoding="utf-8")
     print("Applying", args.overlay, "overlay", flush=True)
     print(run(kube + ["apply", "-k", str(cache)]).decode(), flush=True)

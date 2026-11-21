@@ -1,22 +1,53 @@
 {
-  "title": "Atlas HTTP requests",
+  "title": "Atlas observability",
   "rows": [
     {
       "panels": [
         {
           "title": "Requests per second by service",
           "width": 4,
-          "expr": ["sum(rate(http_server_request_duration_seconds_count[1m])) by (service_name)"]
+          "expr": [
+            "sum(rate(http_server_request_duration_seconds_count[1m])) by (service_name)"
+          ]
         },
         {
           "title": "5xx requests per second by service",
           "width": 4,
-          "expr": ["sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[1m])) by (service_name)"]
+          "expr": [
+            "sum(rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[1m])) by (service_name)"
+          ]
         },
         {
           "title": "p95 request duration by service (seconds)",
           "width": 4,
-          "expr": ["histogram_quantile(0.95, sum(rate(http_server_request_duration_seconds_bucket[1m])) by (le, service_name))"]
+          "expr": [
+            "histogram_quantile(0.95, sum(rate(http_server_request_duration_seconds_bucket[1m])) by (le, service_name))"
+          ]
+        }
+      ]
+    },
+    {
+      "panels": [
+        {
+          "title": "Satellite offset lag",
+          "width": 4,
+          "expr": [
+            "clamp_min(max((atlas_satellite_latest_offset and (atlas_satellite_session_available == 1)) and (time() - timestamp(atlas_satellite_latest_offset) < 15)) - max(atlas_satellite_committed_offset), 0)"
+          ]
+        },
+        {
+          "title": "Satellite watermark lag (seconds)",
+          "width": 4,
+          "expr": [
+            "clamp_min(max((atlas_satellite_feed_timestamp_seconds and (atlas_satellite_session_available == 1)) and (time() - timestamp(atlas_satellite_feed_timestamp_seconds) < 15)) - max(atlas_satellite_watermark_timestamp_seconds), 0)"
+          ]
+        },
+        {
+          "title": "Satellite ingest-to-store p95 (seconds)",
+          "width": 4,
+          "expr": [
+            "histogram_quantile(0.95, sum(rate(atlas_satellite_ingest_to_store_duration_seconds_bucket[1m])) by (le))"
+          ]
         }
       ]
     }

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"atlas/services/bnpb/aggregator/internal/aggregator"
 	"atlas/services/bnpb/aggregator/internal/leadership"
 	"atlas/services/bnpb/aggregator/internal/lease"
@@ -139,13 +141,13 @@ func sourcePollWork(c aggregator.Config, store runtimeData, source string, log *
 	}
 }
 
-func startSources(ctx context.Context, store runtimeData, c aggregator.Config, leader leadership.Leader, launch launcher, log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
+func startSources(ctx context.Context, store runtimeData, c aggregator.Config, leader leadership.Leader, launch launcher, meter metric.Meter, log *slog.Logger) (map[string]aggregator.ReplaySource, error) {
 	replay := map[string]aggregator.ReplaySource{}
 	if os.Getenv("INGESTION_DISABLED") == "1" {
 		return replay, nil
 	}
 
-	sat, err := satelliteWork(store, log)
+	sat, err := satelliteWork(store, meter, log)
 	if err != nil {
 		return nil, err
 	}

@@ -134,7 +134,9 @@ services:
     restart: unless-stopped
 
   aggregator:
-    build: ./services/bnpb/aggregator
+    build:
+      context: ./services/bnpb
+      dockerfile: aggregator/Dockerfile
     environment:
       DATABASE_URL: postgres://aggregator:${CANONICAL_DB_PASSWORD}@postgres:5432/canonical?sslmode=disable
       RABBITMQ_URL: amqp://atlas:${RABBITMQ_PASSWORD}@rabbitmq:5672/
@@ -178,7 +180,9 @@ services:
     restart: unless-stopped
 
   auth:
-    build: ./services/bnpb/auth
+    build:
+      context: ./services/bnpb
+      dockerfile: auth/Dockerfile
     environment:
       AUTH_DATABASE_URL: postgres://auth:${AUTH_DB_PASSWORD}@postgres:5432/auth?sslmode=disable
       AUTH_VALIDATE_TOKEN: ${AUTH_VALIDATE_TOKEN:?run make env}
@@ -200,7 +204,9 @@ services:
     restart: unless-stopped
 
   client-api:
-    build: ./services/bnpb/client-api
+    build:
+      context: ./services/bnpb
+      dockerfile: client-api/Dockerfile
     environment:
       AUTH_BASE_URL: http://auth:8084
       AGGREGATOR_BASE_URL: http://aggregator:8083

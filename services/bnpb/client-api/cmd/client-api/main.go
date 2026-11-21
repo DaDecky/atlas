@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/DaDecky/atlas/services/bnpb/telemetry"
+
 	"atlas/services/bnpb/client-api/internal/clientapi"
 )
 
@@ -21,19 +23,22 @@ func run(log *slog.Logger) error {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	otel := telemetry.Start(ctx, "client-api", log)
+	defer otel.Close(log)
 	// Reuse Auth and Aggregator connections under concurrent load.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConnsPerHost = cfg.RequestCapacity
 	transport.MaxConnsPerHost = cfg.RequestCapacity
 	client := &http.Client{
-		Transport:     transport,
+		Transport:     otel.Transport(transport),
 		Timeout:       cfg.OutboundTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	api := &clientapi.API{Config: cfg, Client: client, Log: log, Reports: &clientapi.RabbitReports{URL: cfg.RabbitMQURL, Timeout: cfg.OutboundTimeout}}
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           api.Handler(),
+		Handler:           otel.Handler(api.Handler(), "/hazards", "/field-reports", "/internal-ops/unprocessed", "/internal-ops/replay"),
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 		ReadTimeout:       cfg.HTTPReadTimeout,
 		WriteTimeout:      2*cfg.OutboundTimeout + time.Second,
