@@ -12,6 +12,7 @@ import (
 type Config struct {
 	DatabaseURL, RabbitMQURL, BMKGURL, PVMBGURL, BMKGKey, PVMBGToken, InternalToken, Address string
 	PollInterval, SourceTimeout, Backoff, QueryTimeout, PublishTimeout                       time.Duration
+	ReadCacheTTL                                                                             time.Duration
 	SourceRetries, QueryCapacity, FieldReservedPercent                                       int
 	IngestPool, QueryPool                                                                    int32
 
@@ -33,6 +34,7 @@ const (
 	defaultSourceTimeout  = 4 * time.Second
 	defaultRetryBackoff   = 200 * time.Millisecond
 	defaultQueryTimeout   = 2 * time.Second
+	defaultReadCacheTTL   = time.Second
 	defaultPublishTimeout = 3 * time.Second
 	defaultSourceRetries  = 2
 	defaultQueryCapacity  = 64
@@ -145,6 +147,7 @@ func ConfigFromEnv() (Config, error) {
 		{"SOURCE_TIMEOUT", defaultSourceTimeout, time.Millisecond, time.Minute, &c.SourceTimeout},
 		{"RETRY_BACKOFF", defaultRetryBackoff, time.Millisecond, time.Minute, &c.Backoff},
 		{"QUERY_TIMEOUT", defaultQueryTimeout, time.Millisecond, time.Minute, &c.QueryTimeout},
+		{"HAZARD_READ_CACHE_TTL", defaultReadCacheTTL, 0, time.Second, &c.ReadCacheTTL},
 		{"PUBLISH_TIMEOUT", defaultPublishTimeout, time.Millisecond, time.Minute, &c.PublishTimeout},
 		{"HTTP_READ_HEADER_TIMEOUT", defaultHTTPReadHeaderTimeout, 100 * time.Millisecond, time.Minute, &c.HTTPReadHeaderTimeout},
 		{"HTTP_READ_TIMEOUT", defaultHTTPReadTimeout, 100 * time.Millisecond, 5 * time.Minute, &c.HTTPReadTimeout},

@@ -28,9 +28,12 @@ type API struct {
 	Store             ReadStore
 	Token             string
 	Timeout           time.Duration
+	ReadCacheTTL      time.Duration
 	Admission         *Admission
 	OnAdmissionReject func(context.Context, bool)
 	Log               *slog.Logger
+
+	readCache hazardReadCache
 }
 
 type statusWriter struct {
@@ -194,10 +197,15 @@ func (a *API) hazards(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), a.Timeout)
 	defer cancel()
 
-	start := time.Now()
-	result, err := a.Store.Read(ctx, q)
-	logDatabaseCall(a.Log, r.Header.Get("X-Correlation-ID"), "read", start, err)
+	id := r.Header.Get("X-Correlation-ID")
 
+	result, err := a.readCache.read(ctx, q, a.ReadCacheTTL, func(ctx context.Context, query Query) (Response, error) {
+		start := time.Now()
+		page, err := a.Store.Read(ctx, query)
+		logDatabaseCall(a.Log, id, "read", start, err)
+
+		return page, err
+	})
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "store_unavailable")
 		return
