@@ -67,11 +67,13 @@ M2 runs every BNPB component on Kubernetes in the namespace `sistem-informasi-ke
 
 The demo cluster has three k3s nodes with separate kernels. The node names are part of the deployment: the overlay pins services to `atlas-node-a`, and the data placement map is computed from the three names.
 
-| Node | Kind | k3s role | Physical host | Host CPU / RAM |
-|---|---|---|---|---|
-| `atlas-node-a` | VM | control plane and worker | TODO | TODO |
-| `atlas-node-b` | VM | worker | TODO | TODO |
-| `atlas-node-c` | VM | worker | TODO | TODO |
+| Node | Kind | k3s role | VM size | Physical host | Host CPU / RAM |
+|---|---|---|---|---|---|
+| `atlas-node-a` | VM (Proxmox VM 103) | control plane and worker | 4 vCPU, 8 GiB RAM, 30 GiB disk | `adhaprox`, Adha's Proxmox VE 9.1 machine | Intel Core i5-8500T, 6 cores / 6 threads, 16 GB RAM |
+| `atlas-node-b` | VM (Proxmox VM 104) | worker | 2 vCPU, 2 GiB RAM, 20 GiB disk | `adhaprox` | same host |
+| `atlas-node-c` | VM (Proxmox VM 105) | worker | 2 vCPU, 2 GiB RAM, 20 GiB disk | `adhaprox` | same host |
+
+All three nodes run on one physical host, so each has its own kernel but they share the host's CPU, memory, and disk. The host reports 15.5 GiB of usable memory.
 
 The node IPs are `10.0.0.40` to `10.0.0.42`, and pods use the k3s default `10.42.0.0/16`. The demo overlay's store NetworkPolicies allow these addresses, so a cluster with other node IPs must update them in `deploy/k8s/overlays/demo/kustomization.yaml`. The demo overlay places the workloads as follows.
 
