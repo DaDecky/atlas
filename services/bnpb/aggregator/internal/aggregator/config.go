@@ -23,7 +23,7 @@ type Config struct {
 	SensorInterval, SensorTimeout, SensorStaleAfter                                          time.Duration
 	ShardDeadline, ReadHedgeDelay, AuditTimeout                                              time.Duration
 	SourceLeaseDuration, SourceLeaseRenewDeadline, SourceLeaseRetryPeriod                    time.Duration
-	ShardReadWorkers, OpsCapacity                                                            int
+	ShardReadWorkers, OpsCapacity, RefillAttempts                                            int
 	DataIngestPool, DataQueryPool                                                            int32
 	HTTPMaxHeaderBytes, MaxSourceRecords, MaxSourceBytes                                     int
 }
@@ -67,6 +67,8 @@ const (
 	defaultReadHedgeDelay = 150 * time.Millisecond
 	// Bound database pressure while allowing 48 shards to share the request budget.
 	defaultShardReadWorkers = 8
+	// A refill copies again when a live write raced the checksum, and gives up after this many tries.
+	defaultRefillAttempts = 5
 	// The checksum and the event export read every shard, so they get more than a request budget.
 	defaultAuditTimeout = 10 * time.Second
 	// Replay and parking listings are operator calls, so two at a time is enough.
@@ -189,6 +191,7 @@ func ConfigFromEnv() (Config, error) {
 		{"MAX_SOURCE_RECORDS", defaultMaxSourceRecords, 1, 100000, &c.MaxSourceRecords},
 		{"MAX_SOURCE_BYTES", defaultMaxSourceBytes, 64 << 10, defaultMaxSourceBytes, &c.MaxSourceBytes},
 		{"SHARD_READ_WORKERS", defaultShardReadWorkers, 1, 48, &c.ShardReadWorkers},
+		{"REFILL_VERIFY_ATTEMPTS", defaultRefillAttempts, 1, 20, &c.RefillAttempts},
 		{"OPS_CAPACITY", defaultOpsCapacity, 1, 64, &c.OpsCapacity},
 		{"DATA_INGEST_POOL_SIZE", defaultDataIngestPool, 1, 64, &dataIngestPool},
 		{"DATA_QUERY_POOL_SIZE", defaultDataQueryPool, 1, 64, &dataQueryPool},
@@ -236,7 +239,7 @@ func envInt(key string, fallback, lowest, highest int) (int, error) {
 // ClusterLimits are the per-copy limits of the replicated store.
 func (c Config) ClusterLimits() ClusterLimits {
 	return ClusterLimits{
-		ShardDeadline: c.ShardDeadline, HedgeDelay: c.ReadHedgeDelay, ReadWorkers: c.ShardReadWorkers,
+		ShardDeadline: c.ShardDeadline, HedgeDelay: c.ReadHedgeDelay, ReadWorkers: c.ShardReadWorkers, RefillAttempts: c.RefillAttempts,
 		IngestPool: c.DataIngestPool, QueryPool: c.DataQueryPool,
 	}
 }
@@ -244,7 +247,7 @@ func (c Config) ClusterLimits() ClusterLimits {
 // DefaultClusterLimits are the limits of a tool that runs without the Aggregator environment.
 func DefaultClusterLimits() ClusterLimits {
 	return ClusterLimits{
-		ShardDeadline: defaultShardDeadline, HedgeDelay: defaultReadHedgeDelay, ReadWorkers: defaultShardReadWorkers,
+		ShardDeadline: defaultShardDeadline, HedgeDelay: defaultReadHedgeDelay, ReadWorkers: defaultShardReadWorkers, RefillAttempts: defaultRefillAttempts,
 		IngestPool: defaultDataIngestPool, QueryPool: defaultDataQueryPool,
 	}
 }

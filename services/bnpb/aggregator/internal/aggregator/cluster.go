@@ -34,9 +34,9 @@ type Cluster struct {
 
 // ClusterLimits bound each copy call and the pools of each data node.
 type ClusterLimits struct {
-	ShardDeadline, HedgeDelay time.Duration
-	ReadWorkers               int
-	IngestPool, QueryPool     int32
+	ShardDeadline, HedgeDelay   time.Duration
+	ReadWorkers, RefillAttempts int
+	IngestPool, QueryPool       int32
 }
 
 var _ ShardStore = (*Cluster)(nil)
@@ -574,6 +574,8 @@ func sortEvents(rows []HazardEvent, audit bool) {
 
 // lockSource serializes source batches on the metadata holder without holding a
 // fence row across connections. A lease takeover still needs majority fencing.
+// It tries the copies in order and takes the lock on exactly one, so it must not hedge like
+// readCopies, which could leave a second advisory lock held on another node.
 func (c *Cluster) lockSource(ctx context.Context, source string) (func(), error) {
 	t, _, err := c.Placement.Load(ctx)
 	if err != nil {
