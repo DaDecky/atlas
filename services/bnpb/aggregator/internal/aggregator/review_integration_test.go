@@ -102,7 +102,40 @@ func TestFailedCopyWriteMarksCopyBehind(t *testing.T) {
 	}
 }
 
-func TestRefillRejectsDifferingDigests(t *testing.T) {
+func TestRefillBackfillsTargetOnlyEventsToDonor(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	h := contractEvent("BMKG", "refill", time.Now().UTC())
+
+	shard := placement.Shard(h.HazardID)
+	if _, err := c.Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: h.IngestedAt, Events: []HazardEvent{h}}); err != nil {
+		t.Fatal(err)
+	}
+
+	table, _, _ := c.Placement.Load(ctx)
+	donor, target := table.Shards[shard][0].Node, table.Shards[shard][1].Node
+	markCopy(t, c, shard, target)
+	// A fenced write that reached only the target is a real event. The donor must not hide it.
+	extra := eventInShard(t, shard, "target-only")
+	if _, err := c.Nodes[target].Shards[shard].Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: extra.IngestedAt, Events: []HazardEvent{extra}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Refill(ctx, shard, target); err != nil {
+		t.Fatal("refill did not converge on the union of both copies", err)
+	}
+
+	if state := copyState(t, c, shard, target); state != "serving" {
+		t.Fatal("verified target not promoted", state)
+	}
+
+	exists, err := c.Nodes[donor].Shards[shard].contains(ctx, extra.HazardID)
+	if err != nil || !exists {
+		t.Fatal("target-only event missing from donor after refill", exists, err)
+	}
+}
+
+func TestRefillRejectsConflictingRowsAtSameRevision(t *testing.T) {
 	c := dataCluster(t)
 	ctx := context.Background()
 	h := contractEvent("BMKG", "refill", time.Now().UTC())
@@ -115,14 +148,12 @@ func TestRefillRejectsDifferingDigests(t *testing.T) {
 	table, _, _ := c.Placement.Load(ctx)
 	target := table.Shards[shard][1].Node
 	markCopy(t, c, shard, target)
-	// An extra target row cannot be fixed by upsert and must fail verification.
-	extra := eventInShard(t, shard, "target-only")
-	if _, err := c.Nodes[target].Shards[shard].Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: extra.IngestedAt, Events: []HazardEvent{extra}}); err != nil {
-		t.Fatal(err)
-	}
+	// Same revision with different content has no safe winner, so verification must fail.
+	store := c.Nodes[target].Shards[shard]
+	execData(t, store, `UPDATE `+store.namespace+`.hazard_events SET area_name='conflict' WHERE hazard_id='`+h.HazardID+`'`)
 
 	if err := c.Refill(ctx, shard, target); err == nil {
-		t.Fatal("refill accepted different digests")
+		t.Fatal("refill accepted conflicting copies")
 	}
 
 	if state := copyState(t, c, shard, target); state != "refilling" {
@@ -353,10 +384,10 @@ func TestDataIntegrationRecoveryContinuesAfterRefillFailure(t *testing.T) {
 		markCopy(t, c, shard, "b")
 	}
 
-	extra := eventInShard(t, bad, "extra")
-	if _, err := c.Nodes["b"].Shards[bad].Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: extra.IngestedAt, Events: []HazardEvent{extra}}); err != nil {
-		t.Fatal(err)
-	}
+	// A conflicting row at the same revision has no safe winner, so this refill fails.
+	conflict := eventInShard(t, bad, "recovery")
+	store := c.Nodes["b"].Shards[bad]
+	execData(t, store, `UPDATE `+store.namespace+`.hazard_events SET area_name='conflict' WHERE hazard_id=$1`, conflict.HazardID)
 
 	if err := c.RecoverOnce(ctx); err == nil {
 		t.Fatal("bad refill not reported")
@@ -562,5 +593,38 @@ func TestDataIntegrationPublicationParkingDoesNotStarveSourceReplay(t *testing.T
 	recovered, err := c.Replay(ctx, "BMKG", 1, 1, func(m ParkedMessage) (HazardEvent, error) { return contractEvent(m.Source, m.SourceRefID, now), nil })
 	if err != nil || recovered != 1 {
 		t.Fatal("older publication blocked source replay", recovered, err)
+	}
+}
+
+func TestRefillCopiesLargeStreamStateBeyondShardDeadline(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	shard := placement.Shard("metadata:SATELIT")
+
+	table, _, _ := c.Placement.Load(ctx)
+	donor, target := table.Shards[shard][0].Node, table.Shards[shard][1].Node
+	// A satellite engine snapshot grows to tens of megabytes on a long feed.
+	state := []byte(`{"blob":"` + strings.Repeat("x", 16<<20) + `"}`)
+	if err := c.Nodes[donor].Shards[shard].restoreState(ctx, "SATELIT", 42, state); err != nil {
+		t.Fatal(err)
+	}
+
+	markCopy(t, c, shard, target)
+	// Client reads keep a tight per-statement deadline. A refill must not inherit it.
+	c.Limits.ShardDeadline = 20 * time.Millisecond
+
+	if err := c.Refill(ctx, shard, target); err != nil {
+		t.Fatal("refill of a large stream state failed", err)
+	}
+
+	if state := copyState(t, c, shard, target); state != "serving" {
+		t.Fatal("refilled target not promoted", state)
+	}
+
+	var size int
+
+	err := c.Nodes[target].Shards[shard].query.QueryRow(ctx, `SELECT length(payload::text) FROM `+c.Nodes[target].Shards[shard].namespace+`.stream_state WHERE source='SATELIT'`).Scan(&size)
+	if err != nil || size < 16<<20 {
+		t.Fatal("target stream state incomplete", size, err)
 	}
 }

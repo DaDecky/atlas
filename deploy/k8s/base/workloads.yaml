@@ -871,6 +871,12 @@
                   "timeoutSeconds": 2,
                   "failureThreshold": 60
                 },
+                "env": [
+                  {
+                    "name": "GOMEMLIMIT",
+                    "value": "192MiB"
+                  }
+                ],
                 "envFrom": [
                   {
                     "secretRef": {
@@ -1011,6 +1017,12 @@
                   "timeoutSeconds": 2,
                   "failureThreshold": 60
                 },
+                "env": [
+                  {
+                    "name": "GOMEMLIMIT",
+                    "value": "192MiB"
+                  }
+                ],
                 "envFrom": [
                   {
                     "secretRef": {

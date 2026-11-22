@@ -16,6 +16,10 @@ import (
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
 
+// refillStatementDeadline bounds one statement of a refill. The recovery cycle bounds
+// the whole refill.
+const refillStatementDeadline = 30 * time.Second
+
 // Refill must be called by the holder of the placement Lease. It first enables
 // dual writes to the target without serving reads from it. Revision-conditional
 // copy cannot overwrite a newer live write. A failed live write changes the
@@ -64,7 +68,19 @@ func (c *Cluster) Refill(ctx context.Context, shard, target string) (err error) 
 	}
 
 	source, dest := c.copyStore(donor, shard), c.copyStore(targetCopy, shard)
+	// SHARD_DEADLINE bounds every statement of a client read. A refill runs in the
+	// background within the recovery cycle and copies whole rows, such as a satellite
+	// stream state of tens of megabytes, which cannot cross the network in 400 ms.
+	source.deadline = max(source.deadline, refillStatementDeadline)
+	dest.deadline = max(dest.deadline, refillStatementDeadline)
+
 	if err = copyShard(ctx, source, dest); err != nil {
+		return err
+	}
+	// Rows that only the target holds are real events: hazard IDs come from the source,
+	// events are never deleted, and every write passed the epoch fence. Bring them back
+	// to the donor, or verification can never succeed and the donor hides those events.
+	if err = backfillDonor(ctx, dest, source); err != nil {
 		return err
 	}
 	// Concurrent dual writes can make two snapshots differ transiently. Retry,
@@ -118,6 +134,27 @@ func copyShard(ctx context.Context, from, to *Store) error {
 		if err = step(ctx, tx, to); err != nil {
 			return err
 		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// backfillDonor copies the insert-only and revision-monotonic tables from the target
+// back to the donor. Upserts there only add missing rows or raise a revision, so the
+// donor never loses or regresses data.
+func backfillDonor(ctx context.Context, target, donor *Store) error {
+	tx, err := target.begin(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err = copyEvents(ctx, tx, donor); err != nil {
+		return err
+	}
+
+	if err = copyFieldReports(ctx, tx, donor); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)

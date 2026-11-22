@@ -60,7 +60,7 @@ The operator machine needs `kubectl` with a context for the cluster, Docker, Go 
 make deploy-demo DEPLOY_ARGS="--context <context> --load-vms <ssh-node-a> <ssh-node-b> <ssh-node-c>"
 ```
 
-The first run creates the ignored file `.env.m2` with fresh credentials, and later runs reuse it. Before the exam, replace `AUDIT_TOKEN`, `PANTAI_AUTH_TOKEN`, and `SATELLITE_TOKEN` in `.env.m2` with the values that the assistants give, then run the command again. Credentials become Secrets and settings become ConfigMaps, and no secret appears in a manifest or in the command output. The Tester Agent is installed from the assistants' manifest, unmodified.
+The first run creates the ignored file `.env.m2` with fresh credentials, and later runs reuse it. Before the exam, replace `AUDIT_TOKEN` and `PANTAI_AUTH_TOKEN` in `.env.m2` with the values that the assistants give, and add a line `SATELLITE_TOKEN=<group-token>`. The script does not create that line, and `.env.example` does not list it. Then run the command again. Credentials become Secrets and settings become ConfigMaps, and no secret appears in a manifest or in the command output. The Tester Agent is installed from the assistants' manifest, unmodified.
 
 ```sh
 kubectl apply -f https://raw.githubusercontent.com/susTuna/if4031-tester-agent/ebb55261711123a9a211739ffbf140a275caa6da/manifest.yaml
@@ -120,6 +120,13 @@ kubectl exec -n tester-agent daemonset/tester-agent -- /app run practice <name>
 kubectl logs -n tester-agent daemonset/tester-agent
 ```
 
+After `wipe-node`, do not power the wiped VM back on right away. The run is still marked `go` in the Tester Agent's ConfigMap `tester-run`, so the agent on that node shuts it down again as soon as it starts. Run a light scenario such as `schema` first, which replaces the run, and only then start the VM.
+
+```sh
+kubectl exec -n tester-agent daemonset/tester-agent -- /app run practice schema
+kubectl -n tester-agent get configmap tester-run -o yaml   # the wipe-node run is no longer the active one
+```
+
 ### M2 P1. Distributed storage
 
 **Goal.** Show that events spread over the nodes, that every event has two copies, and that losing or wiping a node loses nothing.
@@ -158,7 +165,14 @@ loadtest/scale.sh rollout <new-tag>
 
 **Expect.** Another pod takes over the lease and no source is polled twice. The k6 summary reports throughput from complete HTTP 200 responses only, and it counts partial 200s, 429s, and failed requests separately. The two criterion 7 runs must use identical `VUS`, `DURATION`, and `THINK_TIME` from the same machine, so the 2.0x comparison is valid.
 
-A port forward is a single tunnel and caps throughput, so start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`. The `rollout` scenario counts a 429 as a failure, because criterion 8 allows no failed request. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request that k6 could not send. `STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
+A port forward is a single tunnel and caps throughput, so start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`. For the rollout, `<new-tag>` must already be imported on every node, or the new pods fail to pull. Build it and import it the way the deploy script does, without applying anything.
+
+```sh
+docker build -t atlas/aggregator:<new-tag> -f services/bnpb/aggregator/Dockerfile services/bnpb
+for vm in <ssh-node-a> <ssh-node-b> <ssh-node-c>; do docker image save atlas/aggregator:<new-tag> | ssh $vm sudo k3s ctr -n k8s.io images import -; done
+```
+
+The `rollout` scenario counts a 429 as a failure, because criterion 8 allows no failed request. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request that k6 could not send. `STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
 
 ### M2 P3. Unreadable source data
 
@@ -194,9 +208,11 @@ curl -X POST -H 'Authorization: Bearer <internal-ops-token>' -d '{"source":"PVMB
 
 **Goal.** Show that the Aggregator turns the satellite hotspots into one event per fire and matches the reference result.
 
-**Steps.** Set `SATELLITE_TOKEN` so the Aggregator reads the feed, export the stored `SATELIT` events from the Audit API, and compare them with the reference file.
+**Steps.** The token reaches the Aggregator only through the Secret `aggregator-credentials`, which `make deploy-demo` writes from `.env.m2`. Without it the Aggregator logs `satellite_disabled` and P4 never starts. Check the Secret after deploying, then export the stored `SATELIT` events from the Audit API and compare them with the reference file.
 
 ```sh
+kubectl -n $ns get secret aggregator-credentials -o jsonpath='{.data.SATELLITE_TOKEN}' | wc -c   # must be non-zero
+kubectl -n $ns logs deploy/aggregator | grep satellite_disabled                                 # must print nothing
 curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/audit/events?source=SATELIT&limit=1000' > satellite.json
 python scripts/satellite-reference-diff.py --actual satellite.json --reference <reference.json>
 ```
