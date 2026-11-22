@@ -37,8 +37,6 @@ type ParkingPage struct {
 	UnavailableUnits []string        `json:"unavailable_units,omitempty"`
 }
 
-var errInvalidParkingCursor = errors.New("invalid parking cursor")
-
 type Parking interface {
 	Park(context.Context, ParkedMessage) error
 	ListUnprocessed(context.Context, string, string, int) (ParkingPage, error)
@@ -60,6 +58,8 @@ const parkingColumns = `message_id,source,received_at,source_ref_id,raw,raw_leng
 // Row limits alone allow 1000 four-MiB records to exhaust a 512-MiB pod.
 // A short page still has a cursor; replay callers can request another batch.
 const MaxParkingBatchBytes = 8 << 20
+
+var errInvalidParkingCursor = errors.New("invalid parking cursor")
 
 func scanParked(row pgx.Row) (ParkedMessage, error) {
 	var m ParkedMessage

@@ -38,6 +38,7 @@ func (a *AuditAPI) unprocessed(w http.ResponseWriter, r *http.Request) {
 		} else {
 			auditError(w, 503, "unavailable", "parking unavailable")
 		}
+
 		return
 	}
 

@@ -92,6 +92,7 @@ func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, li
 	addPage := func(unit string, page ParkingPage, err error) {
 		mu.Lock()
 		defer mu.Unlock()
+
 		if err != nil {
 			readErr = err
 
@@ -101,6 +102,7 @@ func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, li
 		}
 
 		reads++
+
 		items = append(items, page.Items...)
 		if page.NextCursor != nil && len(page.Items) > 0 {
 			last := page.Items[len(page.Items)-1]
