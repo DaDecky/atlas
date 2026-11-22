@@ -16,6 +16,10 @@ import (
 	"atlas/services/bnpb/aggregator/internal/placement"
 )
 
+// refillStatementDeadline bounds one statement of a refill. The recovery cycle bounds
+// the whole refill.
+const refillStatementDeadline = 30 * time.Second
+
 // Refill must be called by the holder of the placement Lease. It first enables
 // dual writes to the target without serving reads from it. Revision-conditional
 // copy cannot overwrite a newer live write. A failed live write changes the
@@ -64,6 +68,12 @@ func (c *Cluster) Refill(ctx context.Context, shard, target string) (err error) 
 	}
 
 	source, dest := c.copyStore(donor, shard), c.copyStore(targetCopy, shard)
+	// SHARD_DEADLINE bounds every statement of a client read. A refill runs in the
+	// background within the recovery cycle and copies whole rows, such as a satellite
+	// stream state of tens of megabytes, which cannot cross the network in 400 ms.
+	source.deadline = max(source.deadline, refillStatementDeadline)
+	dest.deadline = max(dest.deadline, refillStatementDeadline)
+
 	if err = copyShard(ctx, source, dest); err != nil {
 		return err
 	}
