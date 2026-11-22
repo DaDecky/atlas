@@ -24,7 +24,7 @@ func ObserveQueues(ctx context.Context, url string, heartbeat time.Duration, obs
 		defer stop()
 	}
 
-	for _, name := range []string{FieldReportsQueue, fieldAlertsQueue, "hazard.events.consumer-a", "hazard.events.consumer-b"} {
+	for _, name := range []string{FieldReportsQueue, FieldReportsDeadQueue, fieldAlertsQueue, "hazard.events.consumer-a", "hazard.events.consumer-b"} {
 		if ctx.Err() != nil {
 			return
 		}
