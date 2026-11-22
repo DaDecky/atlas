@@ -459,7 +459,7 @@ func (e *Engine) retireFires(old map[string]Fire, assigned map[string]bool, pref
 			fire.Status, fire.MergedInto = "merged", winners[index]
 		}
 
-		fire.Keys, fire.Satellites = []string{}, []string{}
+		fire.Keys, fire.FeedKeys, fire.Satellites = []string{}, nil, []string{}
 
 		fire.Count, fire.TotalFRP, fire.HighestConfidence, fire.Severity = 0, 0, "", "NORMAL"
 		if !equalFire(e.state.Fires[id], fire) {
@@ -511,6 +511,13 @@ func (e *Engine) summarize(fire Fire, chronological []string) Fire {
 
 	fire.Latitude /= float64(fire.Count)
 	fire.Longitude /= float64(fire.Count)
+
+	fire.FeedKeys = make([]string, 0, len(fire.Keys))
+	for _, key := range fire.Keys {
+		fire.FeedKeys = append(fire.FeedKeys, e.state.Records[key].Detection.ReportKey())
+	}
+
+	sort.Strings(fire.FeedKeys)
 
 	fire.Satellites = []string{}
 	for satellite := range satellites {

@@ -113,7 +113,7 @@ func (s *SatelliteSink) Commit(ctx context.Context, offset int64, payload []byte
 		attributes := map[string]json.RawMessage{}
 		for key, value := range map[string]any{
 			"detection_count": fire.Count, "satellites": fire.Satellites, satelliteConfidenceField: satelliteWireConfidence(fire.HighestConfidence),
-			"total_frp_mw": fire.TotalFRP, "detection_keys": fire.Keys, "status": fire.Status,
+			"total_frp_mw": fire.TotalFRP, "detection_keys": satellite.ReportKeys(fire), "status": fire.Status,
 			"province_reference": s.Reference.Version,
 		} {
 			attributes[key], _ = json.Marshal(value)

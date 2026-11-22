@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,6 +21,9 @@ type Detection struct {
 	Longitude  float64 `json:"longitude"`
 	Confidence string  `json:"confidence"`
 	FRP        float64 `json:"frp"`
+	// FeedKey is satellite|acq_date|acq_time|latitude|longitude with the values as the
+	// feed sent them, without rounding. It is reported and never used for identity.
+	FeedKey string `json:"feed_key,omitempty"`
 }
 
 type Frame struct {
@@ -53,6 +57,7 @@ type Fire struct {
 	Status            string    `json:"status"`
 	MergedInto        string    `json:"merged_into,omitempty"`
 	Keys              []string  `json:"detection_keys"`
+	FeedKeys          []string  `json:"feed_keys,omitempty"`
 	Count             int       `json:"detection_count"`
 	Satellites        []string  `json:"satellites"`
 	HighestConfidence string    `json:"highest_confidence"`
@@ -123,6 +128,47 @@ func coordinate(v float64) string {
 func (d Detection) Key() string {
 	raw, _ := json.Marshal([5]string{d.Satellite, d.AcqDate, d.AcqTime, coordinate(d.Latitude), coordinate(d.Longitude)})
 	return string(raw)
+}
+
+// ReportKey returns the Audit API form of the detection key. Detections stored before
+// FeedKey existed fall back to their normalized identity in the same pipe format.
+func (d Detection) ReportKey() string {
+	if d.FeedKey != "" {
+		return d.FeedKey
+	}
+
+	hhmm, err := strconv.Atoi(d.AcqTime)
+	if err != nil {
+		return strings.Join([]string{d.Satellite, d.AcqDate, d.AcqTime, coordinate(d.Latitude), coordinate(d.Longitude)}, "|")
+	}
+
+	return strings.Join([]string{d.Satellite, d.AcqDate, strconv.Itoa(hhmm), coordinate(d.Latitude), coordinate(d.Longitude)}, "|")
+}
+
+// ReportKeys returns the detection keys of a fire in the Audit API format.
+func ReportKeys(fire Fire) []string {
+	if len(fire.FeedKeys) > 0 || len(fire.Keys) == 0 {
+		return append([]string{}, fire.FeedKeys...)
+	}
+
+	keys := make([]string, 0, len(fire.Keys))
+	for _, key := range fire.Keys {
+		var parts []string
+		if json.Unmarshal([]byte(key), &parts) != nil || len(parts) != 5 {
+			keys = append(keys, key)
+			continue
+		}
+
+		if hhmm, err := strconv.Atoi(parts[2]); err == nil {
+			parts[2] = strconv.Itoa(hhmm)
+		}
+
+		keys = append(keys, strings.Join(parts, "|"))
+	}
+
+	sort.Strings(keys)
+
+	return keys
 }
 
 func DistanceKM(lat1, lon1, lat2, lon2 float64) float64 {

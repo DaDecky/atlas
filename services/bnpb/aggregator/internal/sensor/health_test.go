@@ -52,3 +52,22 @@ func TestViolationMarksDegraded(t *testing.T) {
 		t.Fatalf("health %+v", health)
 	}
 }
+
+func TestSilentSensorTurnsStale(t *testing.T) {
+	last := Position{ObservedAt: generated.Add(-time.Hour), ObservationID: "z"}
+
+	got, _, health := Assess(Page{GeneratedAt: generated, Items: []Item{}}, last, 5*time.Minute)
+	if len(got) != 0 || !health.Stale {
+		t.Fatalf("silent sensor with an hour-old last reading: items %d, health %+v", len(got), health)
+	}
+
+	_, _, health = Assess(Page{GeneratedAt: generated, Items: []Item{}}, Position{ObservedAt: generated.Add(-time.Second), ObservationID: "z"}, 5*time.Minute)
+	if health.Stale {
+		t.Fatal("empty page right after a fresh reading marked stale")
+	}
+
+	_, _, health = Assess(Page{GeneratedAt: generated, Items: []Item{}}, Position{}, 5*time.Minute)
+	if health.Stale {
+		t.Fatal("first empty page with no history marked stale")
+	}
+}

@@ -170,18 +170,7 @@ func TestIntegrationSatelliteResumeHeartbeatAndLostCommitReply(t *testing.T) {
 				continue
 			}
 
-			var raw []byte
-
-			switch frame.Type {
-			case "retract":
-				raw, _ = json.Marshal(map[string]string{"key": frame.Key})
-			case "heartbeat":
-				raw = []byte(`{}`)
-			default:
-				raw, _ = json.Marshal(frame.Detection)
-			}
-
-			fmt.Fprintf(w, "event: %s\nid: %d\ndata: %s\n\n", frame.Type, frame.Offset, raw)
+			fmt.Fprintf(w, "event: %s\nid: %d\ndata: %s\n\n", frame.Type, frame.Offset, wireFrame(frame))
 			flusher.Flush()
 		}
 	}))
@@ -209,9 +198,16 @@ func TestIntegrationSatelliteResumeHeartbeatAndLostCommitReply(t *testing.T) {
 		t.Fatal("final committed stream position", stored.Offset, err)
 	}
 
+	// The baseline decodes the same wire bytes, so both runs see the feed text of each key.
 	baseline := satellite.New()
+
 	for _, frame := range frames {
-		if _, err = baseline.Apply(frame); err != nil {
+		decoded, err := satellite.DecodeFeed(satellite.SSEEvent{Type: frame.Type, Offset: frame.Offset, Data: wireFrame(frame)})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err = baseline.Apply(decoded); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -340,4 +336,20 @@ func TestIntegrationSatelliteEveryCrashCutUsesDurableState(t *testing.T) {
 	}
 
 	t.Log("all 8 crash cuts reloaded PostgreSQL state and retained identical fire identities and membership")
+}
+
+// wireFrame writes a test frame as the feed sends it.
+func wireFrame(frame satellite.Frame) []byte {
+	var raw []byte
+
+	switch frame.Type {
+	case "retract":
+		raw, _ = json.Marshal(map[string]string{"key": frame.Key})
+	case "heartbeat":
+		raw = []byte(`{}`)
+	default:
+		raw, _ = json.Marshal(frame.Detection)
+	}
+
+	return raw
 }

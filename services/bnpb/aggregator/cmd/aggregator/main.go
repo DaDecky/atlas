@@ -121,13 +121,20 @@ func startWorkers(ctx context.Context, store runtimeData, c aggregator.Config, l
 	return startSources(ctx, store, c, leader, launch, meter, metrics, log)
 }
 
+// writeTimeout covers the slowest handler on this server. The Audit API shares it and
+// answers within AUDIT_TIMEOUT, so a shorter limit would cut a checksum or a page of
+// 1,000 events off before its JSON is written.
+func writeTimeout(c aggregator.Config) time.Duration {
+	return max(c.QueryTimeout, c.AuditTimeout) + time.Second
+}
+
 func newServer(c aggregator.Config, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              c.Address,
 		Handler:           handler,
 		ReadHeaderTimeout: c.HTTPReadHeaderTimeout,
 		ReadTimeout:       c.HTTPReadTimeout,
-		WriteTimeout:      c.QueryTimeout + time.Second,
+		WriteTimeout:      writeTimeout(c),
 		IdleTimeout:       c.HTTPIdleTimeout,
 		MaxHeaderBytes:    c.HTTPMaxHeaderBytes,
 	}

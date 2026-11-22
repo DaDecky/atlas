@@ -128,3 +128,46 @@ func TestReferenceUsesNearestCentreAndStableTies(t *testing.T) {
 		t.Fatal("distance tie depends on table order", got)
 	}
 }
+
+func TestDetectionKeysKeepFeedTextWithoutRounding(t *testing.T) {
+	engine := New()
+	bodies := []struct{ kind, body string }{
+		{"detection", `{"offset":0,"detection":{"satellite":"N20","acq_date":"2026-11-12","acq_time":243,"latitude":-2.51230,"longitude":113.80440,"confidence":"h","frp":20}}`},
+		{"detection", `{"offset":1,"detection":{"satellite":"N21","acq_date":"2026-11-12","acq_time":"0250","latitude":-2.51300,"longitude":113.80500,"confidence":"n","frp":21.45}}`},
+		{"update", `{"offset":2,"key":"N20|2026-11-12|243|-2.5123|113.8044","changes":{"frp":25}}`},
+	}
+
+	want := []string{"N20|2026-11-12|243|-2.51230|113.80440", "N21|2026-11-12|0250|-2.51300|113.80500"}
+
+	for offset, record := range bodies {
+		frame, err := DecodeFeed(SSEEvent{Type: record.kind, Offset: int64(offset), Data: []byte(record.body)})
+		if err != nil {
+			t.Fatal(offset, err)
+		}
+
+		fires, err := engine.Apply(frame)
+		if err != nil {
+			t.Fatal(offset, err)
+		}
+
+		if offset == 0 {
+			continue
+		}
+
+		if len(fires) != 1 {
+			t.Fatal(offset, "expected one fire", fires)
+		}
+
+		got := ReportKeys(fires[0])
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("offset %d: detection_keys = %q, want %q", offset, got, want)
+		}
+	}
+}
+
+func TestReportKeysConvertsStoredCanonicalKeys(t *testing.T) {
+	fire := Fire{Keys: []string{`["N20","2026-11-12","0243","-2.5123","113.8044"]`}}
+	if got := ReportKeys(fire); len(got) != 1 || got[0] != "N20|2026-11-12|243|-2.5123|113.8044" {
+		t.Fatalf("ReportKeys = %q", got)
+	}
+}
