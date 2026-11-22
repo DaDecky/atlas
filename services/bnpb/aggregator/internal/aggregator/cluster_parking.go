@@ -43,7 +43,17 @@ func (c *Cluster) park(ctx context.Context, m ParkedMessage, epoch int64) error 
 	}
 
 	shard := placement.Shard("metadata:" + m.Source)
-	_, err = c.replicate(ctx, t, shard, m.Source, epoch, 0, func(call context.Context, s *Store) ([]HazardEvent, error) {
+
+	var deadline time.Duration
+	if m.payload != nil || len(m.Raw) > defaultMaxSourceBytes {
+		// Streaming a body can take longer than a normal shard write.
+		deadline = defaultSourceTimeout
+		if end, ok := ctx.Deadline(); ok && time.Until(end) > 0 {
+			deadline = time.Until(end)
+		}
+	}
+
+	_, err = c.replicate(ctx, t, shard, m.Source, epoch, deadline, func(call context.Context, s *Store) ([]HazardEvent, error) {
 		return nil, s.park(call, m, epoch)
 	})
 
@@ -52,6 +62,12 @@ func (c *Cluster) park(ctx context.Context, m ParkedMessage, epoch int64) error 
 
 func (c *Cluster) ListUnprocessed(ctx context.Context, source, cursor string, limit int) (ParkingPage, error) {
 	return c.listUnprocessed(ctx, source, cursor, limit, true)
+}
+
+func (c *Cluster) ReadParkingPart(ctx context.Context, source, id string, part int64) (ParkingPart, error) {
+	return readMetadata(ctx, c, source, func(call context.Context, s *Store) (ParkingPart, error) {
+		return s.ReadParkingPart(call, source, id, part)
+	})
 }
 
 func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, limit int, publications bool) (ParkingPage, error) {

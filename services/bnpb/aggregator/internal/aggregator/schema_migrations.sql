@@ -40,6 +40,12 @@ CREATE TABLE IF NOT EXISTS unprocessed_messages (
  correlation_id text NOT NULL
 );
 CREATE INDEX IF NOT EXISTS parking_pending ON unprocessed_messages(source,received_at,message_id) WHERE status <> 'recovered';
+CREATE TABLE IF NOT EXISTS unprocessed_payload_chunks (
+ message_id text NOT NULL REFERENCES unprocessed_messages(message_id) ON DELETE CASCADE,
+ part bigint NOT NULL CHECK (part >= 0),
+ data bytea NOT NULL CHECK (octet_length(data) BETWEEN 1 AND 262144),
+ PRIMARY KEY(message_id,part)
+);
 CREATE TABLE IF NOT EXISTS field_reports_inbox (
  report_id text PRIMARY KEY, payload jsonb NOT NULL CHECK(jsonb_typeof(payload)='object'),
  received_at timestamptz NOT NULL

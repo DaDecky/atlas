@@ -476,7 +476,7 @@ func TestDataIntegrationRefillPreservesParkedPublications(t *testing.T) {
 		}
 	}
 
-	execData(t, c.Nodes[target].Store, `TRUNCATE public.publication_outbox,public.unprocessed_messages`)
+	execData(t, c.Nodes[target].Store, `TRUNCATE public.publication_outbox,public.unprocessed_messages,public.unprocessed_payload_chunks`)
 	markCopy(t, c, shard, target)
 
 	if err := c.Refill(ctx, shard, target); err != nil {

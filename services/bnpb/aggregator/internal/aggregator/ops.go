@@ -56,6 +56,11 @@ func (a *OpsAPI) Handler() http.Handler {
 
 func (a *OpsAPI) unprocessed(w http.ResponseWriter, r *http.Request) {
 	q, err := r.URL.Query(), error(nil)
+	if q.Has("message_id") || q.Has("part") {
+		a.unprocessedPart(w, r)
+		return
+	}
+
 	for key, values := range q {
 		if len(values) != 1 || key != "source" && key != "limit" && key != "cursor" && key != "include_raw" {
 			err = errors.New("invalid parameter")
@@ -105,6 +110,31 @@ func (a *OpsAPI) unprocessed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, 200, page)
+}
+
+func (a *OpsAPI) unprocessedPart(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	source, id := q.Get("source"), q.Get("message_id")
+
+	part, err := strconv.ParseInt(q.Get("part"), 10, 64)
+	if err != nil || part < 0 || !validSource(source) || id == "" || len(id) > 256 || len(q) != 3 ||
+		len(q["source"]) != 1 || len(q["message_id"]) != 1 || len(q["part"]) != 1 {
+		auditError(w, 400, "bad_request", "parameter tidak valid")
+		return
+	}
+
+	result, err := a.Parking.ReadParkingPart(r.Context(), source, id, part)
+	if err != nil {
+		auditError(w, 503, "parking_unavailable", "pesan gagal tidak tersedia")
+		return
+	}
+
+	if len(result.Data) == 0 {
+		auditError(w, 404, "not_found", "potongan pesan tidak ditemukan")
+		return
+	}
+
+	writeJSON(w, 200, result)
 }
 
 func (a *OpsAPI) replay(w http.ResponseWriter, r *http.Request) {

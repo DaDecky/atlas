@@ -3,7 +3,9 @@
 package aggregator
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -73,7 +76,7 @@ func dataCluster(t *testing.T) *Cluster {
 		}
 
 		nodes[name] = node
-		if _, err = node.Store.ingest.Exec(ctx, `TRUNCATE public.publication_outbox,public.unprocessed_messages; UPDATE public.source_fence SET epoch=1; UPDATE public.ingestion_clock SET last_value='epoch'`); err != nil {
+		if _, err = node.Store.ingest.Exec(ctx, `TRUNCATE public.publication_outbox,public.unprocessed_messages,public.unprocessed_payload_chunks; UPDATE public.source_fence SET epoch=1; UPDATE public.ingestion_clock SET last_value='epoch'`); err != nil {
 			t.Fatal(err)
 		}
 
@@ -85,7 +88,7 @@ func dataCluster(t *testing.T) *Cluster {
 				t.Fatal(err)
 			}
 
-			_, err = tx.Exec(ctx, `TRUNCATE hazard_events,stream_state,unprocessed_messages,field_reports_inbox; UPDATE source_progress SET checkpoint=NULL,last_success_at=NULL,stale_since=NULL`)
+			_, err = tx.Exec(ctx, `TRUNCATE hazard_events,stream_state,unprocessed_messages,unprocessed_payload_chunks,field_reports_inbox; UPDATE source_progress SET checkpoint=NULL,last_success_at=NULL,stale_since=NULL`)
 			if err == nil {
 				err = tx.Commit(ctx)
 			}
@@ -522,6 +525,124 @@ func TestDataIntegrationAutomaticWipeRecoveryAndParking(t *testing.T) {
 	}
 }
 
+func TestDataIntegrationOversizedPayloadSurvivesRefill(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	source := SourcePVMBG
+
+	good, err := json.Marshal(fixture(t, "volcanic-v1.json")[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`[` + string(good) + `,{"oversized":"` + strings.Repeat("0123456789abcdef", (9<<20)/16) + `"}]`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) }))
+	defer server.Close()
+
+	poller := &Poller{Source: source, BaseURL: server.URL, Client: server.Client(), Timeout: defaultSourceTimeout, Log: testLog(), Store: &EpochIngest{Data: c, Source: source, WriterEpoch: 1}}
+	sha := fmt.Sprintf("%x", sha256.Sum256(body))
+	path := "/volcanic-reports"
+	id := fmt.Sprintf("%x", sha256.Sum256([]byte(source+"\x00"+path+"\x00"+sha)))
+
+	legacy := ParkedMessage{MessageID: id, Source: source, ReceivedAt: time.Now().UTC(), Raw: body[:64<<10], RawSHA256: sha, RawLength: int64(len(body)), RawCut: true, ReasonCode: "body_too_large", Reason: "legacy prefix"}
+	if err := c.Park(ctx, legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 2 {
+		if err := poller.Poll(ctx, "oversized-test"); err != nil {
+			t.Fatal("full parking failed", err)
+		}
+	}
+
+	hazards, err := c.Read(ctx, Query{Source: source, Limit: 10})
+	if err != nil || len(hazards.Data) != 1 || hazards.Data[0].Revision != 1 {
+		t.Fatal("valid record lost or duplicated", hazards.Data, err)
+	}
+
+	page, err := c.ListUnprocessed(ctx, source, "", 10)
+	if err != nil || len(page.Items) != 1 || page.Items[0].MessageID != id || !page.Items[0].RawChunked || page.Items[0].RawCut || page.Items[0].RawSHA256 != sha || page.Items[0].RawLength != int64(len(body)) {
+		t.Fatal("wrong parked metadata or duplicate", page, err)
+	}
+
+	shard := placement.Shard("metadata:" + source)
+
+	table, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	verify := func(store *Store) {
+		t.Helper()
+
+		offset := 0
+
+		for part := int64(0); ; part++ {
+			result, err := store.ReadParkingPart(ctx, source, id, part)
+
+			end := min(offset+parkingChunkBytes, len(body))
+			if err != nil || !bytes.Equal(result.Data, body[offset:end]) {
+				t.Fatalf("part %d differs from ingested bytes: %v", part, err)
+			}
+
+			if end == len(body) {
+				if result.NextPart != nil {
+					t.Fatal("last part must have a null next_part")
+				}
+
+				break
+			}
+
+			if result.NextPart == nil || *result.NextPart != part+1 {
+				t.Fatal("missing next part", part)
+			}
+
+			offset = end
+		}
+	}
+
+	copies := table.Shards[shard]
+	for _, copy := range copies {
+		verify(c.Nodes[copy.Node].Shards[shard])
+	}
+
+	target := copies[1]
+	store := c.Nodes[target.Node].Shards[shard]
+	execData(t, store, `TRUNCATE `+store.namespace+`.unprocessed_messages,`+store.namespace+`.unprocessed_payload_chunks`)
+
+	if err = c.MarkBehind(ctx, BehindRequest{Source: source, Epoch: 1, Shard: shard, Copy: target.Node, StoreID: target.StoreID}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = c.Refill(ctx, shard, target.Node); err != nil {
+		t.Fatal(err)
+	}
+
+	verify(store)
+
+	ops := (&OpsAPI{Parking: c, Token: "ops", Capacity: 1}).Handler()
+	last := (len(body) - 1) / parkingChunkBytes
+	query := url.Values{"source": {source}, "message_id": {id}, "part": {strconv.Itoa(last)}}
+	r := httptest.NewRequest(http.MethodGet, "/internal/ops/unprocessed?"+query.Encode(), nil)
+	w := httptest.NewRecorder()
+	ops.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatal("payload must require Ops authorization", w.Code)
+	}
+
+	r.Header.Set("Authorization", "Bearer ops")
+
+	w = httptest.NewRecorder()
+	ops.ServeHTTP(w, r)
+
+	var part ParkingPart
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &part) != nil || !bytes.Equal(part.Data, body[last*parkingChunkBytes:]) || part.NextPart != nil {
+		t.Fatal("Ops did not return the final payload part", w.Code)
+	}
+}
+
 func TestDataIntegrationNewNodeJoinsWithoutStoppingReads(t *testing.T) {
 	c := dataCluster(t)
 	ctx := context.Background()
@@ -559,7 +680,7 @@ func TestDataIntegrationNewNodeJoinsWithoutStoppingReads(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		_, err = tx.Exec(ctx, `TRUNCATE hazard_events,stream_state,unprocessed_messages`)
+		_, err = tx.Exec(ctx, `TRUNCATE hazard_events,stream_state,unprocessed_messages,unprocessed_payload_chunks`)
 		if err == nil {
 			err = tx.Commit(ctx)
 		}
