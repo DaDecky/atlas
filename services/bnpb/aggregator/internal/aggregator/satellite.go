@@ -19,8 +19,12 @@ type SatelliteSink struct {
 
 const satelliteConfidenceField = "max_confidence"
 
-func satelliteWireConfidence(confidence string) string {
+// satelliteWireConfidence maps the engine value to Appendix A. A withdrawn or merged fire has no
+// detections left, so it has no confidence and stores null rather than an empty string.
+func satelliteWireConfidence(confidence string) any {
 	switch confidence {
+	case "":
+		return nil
 	case "low":
 		return "l"
 	case "nominal":
@@ -32,7 +36,9 @@ func satelliteWireConfidence(confidence string) string {
 	}
 }
 
-// Expose the current field on reads of events written before the wire contract fix.
+// Expose the current field on reads of events written before the wire contract fix. Deployed
+// clusters still hold SATELIT rows with highest_confidence, and the engine rewrites only fires that
+// change, so this stays until those rows are gone.
 func normalizeSatelliteConfidence(event *HazardEvent) {
 	if event.Source != "SATELIT" {
 		return

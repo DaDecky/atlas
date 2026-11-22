@@ -69,6 +69,8 @@ func TestIntegrationSatelliteAuditConfidence(t *testing.T) {
 	sink := &SatelliteSink{Data: store, Epoch: 1, Reference: reference}
 	if err = sink.Commit(ctx, 0, []byte(`{}`), []satellite.Fire{{
 		ID: "new", Count: 2, Status: "active", HighestConfidence: "high", Severity: "WASPADA", OccurredAt: now,
+	}, {
+		ID: "closed", Status: "withdrawn", Keys: []string{}, Satellites: []string{}, Severity: "NORMAL", OccurredAt: now,
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -84,11 +86,11 @@ func TestIntegrationSatelliteAuditConfidence(t *testing.T) {
 	var page struct {
 		Items []HazardEvent `json:"items"`
 	}
-	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &page) != nil || len(page.Items) != 3 {
 		t.Fatal("unexpected Audit response", response.Code, response.Body.String())
 	}
 
-	wanted := map[string]string{"legacy": `"n"`, "new": `"h"`}
+	wanted := map[string]string{"legacy": `"n"`, "new": `"h"`, "closed": `null`}
 	for _, event := range page.Items {
 		if string(event.Attributes["max_confidence"]) != wanted[event.SourceRefID] || event.Attributes["highest_confidence"] != nil {
 			t.Fatal("incorrect Audit confidence", event.SourceRefID, event.Attributes)
