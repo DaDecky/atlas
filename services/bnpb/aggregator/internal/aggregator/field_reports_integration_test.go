@@ -308,6 +308,7 @@ func TestDataIntegrationFieldReportsDuringHolderReplacement(t *testing.T) {
 
 func TestIntegrationFieldReportContractViolationIsDeadLetteredNotLooped(t *testing.T) {
 	s := integrationStore(t)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
