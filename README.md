@@ -1,6 +1,6 @@
 # Atlas
 
-Disaster coordination services for BMKG, PVMBG, and BNPB. M1 runs each component in its own container. Auth owns its session database, the Aggregator owns the canonical store, and clients retrieve hazard data through the Client API.
+Disaster coordination services for BMKG, PVMBG, and BNPB. Compose runs each component in its own container for development, and M2 runs on k3s as described in [Run on k3s (M2)](#run-on-k3s-m2). Auth owns its session database, the Aggregator owns the canonical store, and clients retrieve hazard data through the Client API.
 
 ## Run
 
@@ -58,6 +58,148 @@ set -a; source .env; set +a
 | `ACCESS_TOKEN_TTL` | Auth | Access token lifetime. | `60s` |
 
 Other limits are optional environment variables. Each service's `config.go` holds the name, the default, and the range of each, and Compose passes the value from `.env` when it is set.
+
+## Run on k3s (M2)
+
+M2 runs every BNPB component on Kubernetes in the namespace `sistem-informasi-kebencanaan-bnpb`. Compose remains the local development stack. The commands below start from an empty cluster.
+
+### Topology
+
+The demo cluster has three k3s nodes with separate kernels. The node names are part of the deployment: the overlay pins services to `atlas-node-a`, and the data placement map is computed from the three names.
+
+| Node | Kind | k3s role | Physical host | Host CPU / RAM |
+|---|---|---|---|---|
+| `atlas-node-a` | VM | control plane and worker | TODO | TODO |
+| `atlas-node-b` | VM | worker | TODO | TODO |
+| `atlas-node-c` | VM | worker | TODO | TODO |
+
+The node IPs are `10.0.0.40` to `10.0.0.42`, and pods use the k3s default `10.42.0.0/16`. The demo overlay places the workloads as follows.
+
+| Component | Replicas | Placement |
+|---|---|---|
+| Aggregator | 3 | Spread one per node by anti-affinity and a topology spread constraint |
+| Canonical Store (`canonical-store`) | 3 | One per node, required by anti-affinity, data on the node's local disk |
+| Auth, Client API | 2 each | `atlas-node-a` |
+| BMKG, PVMBG, their databases, Auth database, RabbitMQ, consumers, notifier | 1 each | `atlas-node-a` |
+| Sensor Pantai | 1 | Scheduler's choice, vendor manifest unmodified |
+| VictoriaMetrics, Jaeger | 1 each | `atlas-node-a`, only with telemetry enabled |
+| Tester Agent | 1 per node | DaemonSet in its own namespace `tester-agent` |
+
+### Deploy
+
+Install `kubectl` with a context for the cluster, Docker, Go 1.27.4, and Python 3 with the `cryptography` package. Each node needs an SSH alias that can run `sudo k3s ctr`, so the script can import the locally built images.
+
+Deploy the whole system with one command. It builds the images, imports them on each node, applies the `demo` overlay with lease-managed ingestion and telemetry, and waits until every workload is ready.
+
+```sh
+make deploy-demo DEPLOY_ARGS="--context <context> --load-vms <ssh-node-a> <ssh-node-b> <ssh-node-c>"
+```
+
+`make deploy-demo` is shorthand for `python scripts/deploy-k8s.py --build --overlay demo --enable-ingestion --enable-telemetry` followed by `DEPLOY_ARGS`. The first run creates the ignored file `.env.m2` with fresh credentials, and later runs reuse it. Before the exam, replace `AUDIT_TOKEN`, `PANTAI_AUTH_TOKEN`, and `SATELLITE_TOKEN` in `.env.m2` with the values the assistants give, then run the command again. Credentials become Secrets and settings become ConfigMaps, and no secret appears in a manifest or in the command output.
+
+Install the Tester Agent with the assistants' manifest, unmodified.
+
+```sh
+kubectl apply -f https://raw.githubusercontent.com/susTuna/if4031-tester-agent/ebb55261711123a9a211739ffbf140a275caa6da/manifest.yaml
+```
+
+Every service is a ClusterIP Service, so reach them with port forwards. The rest of this section assumes these forwards and `set -a; source .env.m2; set +a`.
+
+```sh
+ns=sistem-informasi-kebencanaan-bnpb
+kubectl -n $ns port-forward svc/client-api 8080:8080 &
+kubectl -n $ns port-forward svc/auth 8084:8084 &
+kubectl -n $ns port-forward svc/aggregator 8083:8083 &        # Audit API
+kubectl -n $ns port-forward svc/sensor-pantai 18080:8080 &
+kubectl -n $ns port-forward svc/victoriametrics 8428:8428 &   # dashboard at /vmui
+kubectl -n $ns port-forward svc/jaeger 16686:16686 &          # traces
+```
+
+### M2 configuration
+
+`.env.m2` uses the same variables as `.env`, described in [Configuration](#configuration), plus the ones below. Optional values are read only when set, and each default is listed in `.env.example`.
+
+| Variable | Used by | Meaning | Default |
+|---|---|---|---|
+| `AUDIT_TOKEN` | Aggregator | Bearer token of the Audit API. | secret |
+| `PANTAI_AUTH_TOKEN` | Sensor Pantai, Aggregator | Shared Sensor Pantai token. | secret |
+| `SATELLITE_TOKEN` | Aggregator | Group token for the satellite feed. Without it the satellite adapter stays off. | unset |
+| `SOURCE_LEASE_DURATION`, `SOURCE_LEASE_RENEW_DEADLINE`, `SOURCE_LEASE_RETRY_PERIOD` | Aggregator | Ingestion lease timing. A leader that misses the renew deadline stops writing. | `15s`, `10s`, `2s` |
+| `SENSOR_POLL_INTERVAL`, `SENSOR_TIMEOUT`, `SENSOR_STALE_AFTER` | Aggregator | Sensor Pantai polling, request timeout, and the age after which its data is stale. | `1s`, `2s`, `5m` |
+| `SHARD_DEADLINE`, `READ_HEDGE_DELAY`, `SHARD_READ_WORKERS` | Aggregator | Per-copy read deadline, delay before a hedged read to the second copy, and parallel shard reads. | `400ms`, `150ms`, `8` |
+| `REFILL_VERIFY_ATTEMPTS` | Aggregator | Verification attempts per refilled copy. | `5` |
+| `DATA_INGEST_POOL_SIZE`, `DATA_QUERY_POOL_SIZE` | Aggregator | Connection pools per Canonical Store node. | `4`, `8` |
+| `HAZARD_READ_CACHE_TTL` | Aggregator | First-page read cache, `0s` turns it off. | `1s` |
+| `AUDIT_TIMEOUT`, `OPS_CAPACITY` | Aggregator | Audit API request deadline and concurrent Internal Ops requests. | `10s`, `2` |
+
+### Observability
+
+With telemetry enabled, the Aggregator, Auth, and Client API export traces to Jaeger and metrics to VictoriaMetrics over OTLP, with 10% trace sampling. The dashboard `Atlas observability` in VictoriaMetrics shows request rate, 5xx rate, and p95 latency per service, plus satellite lag, capacity rejections by client class, broker messages ready per queue, field report publish-to-ack latency, outbox backlog, copy refills, source polls, the active lease holder and writer epoch, stale writer rejections, and the Sensor Pantai circuit breaker. BMKG, PVMBG, the consumers, and the notifier have no exporter. Their queues are measured from the Aggregator through the broker, and their JSON logs carry the correlation ID like every other service.
+
+```sh
+kubectl -n $ns logs deploy/aggregator -f | grep <correlation-id>
+```
+
+### M2 test scenarios
+
+Practice scenarios of the Tester Agent cover the injected failures, such as node loss, clock skew, network delay, and mock outages. List them and run one at any time. Freezing a VM is done by hand on its host.
+
+```sh
+kubectl exec -n tester-agent daemonset/tester-agent -- /app list
+kubectl exec -n tester-agent daemonset/tester-agent -- /app run practice <name>
+kubectl logs -n tester-agent daemonset/tester-agent
+```
+
+**P1. Distributed storage.** Check where each event lives and that the replicas agree, before and after a node is lost or wiped. `make data-integration` runs the wipe, refill, and node join tests locally.
+
+```sh
+curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/audit/location?hazard_id=<hazard-id>'
+curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/checksum
+```
+
+**P2. Leadership and scaling.** Delete the leader pod, or skew a node's clock with the Tester Agent, and watch the lease move in the Aggregator logs and the `source lease` panel. For the load criteria, run k6 together with `loadtest/scale.sh`. The k6 summary reports throughput from complete HTTP 200 responses only. Partial 200s, 429s, and failed requests are counted separately. A port forward is a single tunnel and caps throughput, so for these runs start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`.
+
+```sh
+# Criterion 6: 10,000 VUs while the Aggregator goes from 3 to 5 to 2 instances
+k6 run -e SCENARIO=sustained -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
+loadtest/scale.sh scale
+# Criterion 7: run once with 1 Aggregator and once with 3, then compare the throughput lines
+kubectl -n $ns scale deployment/aggregator --replicas=1
+k6 run -e SCENARIO=throughput -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js
+# Criterion 8: a version swap under load fails k6 if any request fails
+k6 run -e SCENARIO=rollout -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
+loadtest/scale.sh rollout <new-tag>
+```
+
+The `rollout` threshold fails on any request that is neither a 200 nor a controlled 429. `STEP_SECONDS` sets the wait between scale steps, and `VUS`, `DURATION`, and `THINK_TIME` size the k6 run.
+
+**P3. Unreadable source data.** Switch PVMBG to schema 3, 4, or 5. Payloads that break the contract, including oversized ones, are parked with their reason and full body, and Internal Ops can inspect and replay them. Field Team reports are accepted through `POST /field-reports`.
+
+```sh
+kubectl -n $ns exec deploy/pvmbg -- wget -qO- --post-data '{"version":4}' http://127.0.0.1:8082/admin/schema-version
+curl -H 'Authorization: Bearer <internal-ops-token>' http://localhost:8080/internal-ops/unprocessed
+curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/unprocessed
+```
+
+**P4. Satellite feed.** With `SATELLITE_TOKEN` set, the Aggregator reads the satellite feed and stores one `SATELIT` event per fire. Compare the Audit API output with a reference file.
+
+```sh
+curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/audit/events?source=SATELIT&limit=1000' > satellite.json
+python scripts/satellite-reference-diff.py --actual satellite.json --reference <reference.json>
+```
+
+**P5. Sensor Pantai and the Field Team alert path.** Run the Sensor Pantai practice scenarios through the Tester Agent. The overload scenario floods the Client API as Media while Field Team keeps reading, and must reject only Media.
+
+```sh
+k6 run -e SCENARIO=overload -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET \
+  -e FIELD_TEAM_CLIENT_ID=$FIELD_TEAM_CLIENT_ID -e FIELD_TEAM_CLIENT_SECRET=$FIELD_TEAM_CLIENT_SECRET loadtest/m2.js
+```
+
+The alert path has two objectives: no critical event lost, and 99% of critical events delivered within 5 s. `scripts/error-budget.py` takes the expected critical events from Sensor Pantai itself, so an event lost before Atlas stored it still counts. It matches them with the notifier log and reports how much of each budget a window used.
+
+```sh
+kubectl -n $ns logs deploy/notifier --since=2h | python scripts/error-budget.py --sensor http://localhost:18080 --since 2026-11-22T10:00:00Z
+```
 
 ## Source mocks
 
