@@ -67,6 +67,12 @@ func (c *Cluster) Refill(ctx context.Context, shard, target string) (err error) 
 	if err = copyShard(ctx, source, dest); err != nil {
 		return err
 	}
+	// Rows that only the target holds are real events: hazard IDs come from the source,
+	// events are never deleted, and every write passed the epoch fence. Bring them back
+	// to the donor, or verification can never succeed and the donor hides those events.
+	if err = backfillDonor(ctx, dest, source); err != nil {
+		return err
+	}
 	// Concurrent dual writes can make two snapshots differ transiently. Retry,
 	// leaving the target non-serving if verification cannot establish equality.
 	verified := false
@@ -118,6 +124,27 @@ func copyShard(ctx context.Context, from, to *Store) error {
 		if err = step(ctx, tx, to); err != nil {
 			return err
 		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// backfillDonor copies the insert-only and revision-monotonic tables from the target
+// back to the donor. Upserts there only add missing rows or raise a revision, so the
+// donor never loses or regresses data.
+func backfillDonor(ctx context.Context, target, donor *Store) error {
+	tx, err := target.begin(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err = copyEvents(ctx, tx, donor); err != nil {
+		return err
+	}
+
+	if err = copyFieldReports(ctx, tx, donor); err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)

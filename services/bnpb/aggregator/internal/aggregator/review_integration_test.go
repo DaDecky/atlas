@@ -102,7 +102,40 @@ func TestFailedCopyWriteMarksCopyBehind(t *testing.T) {
 	}
 }
 
-func TestRefillRejectsDifferingDigests(t *testing.T) {
+func TestRefillBackfillsTargetOnlyEventsToDonor(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	h := contractEvent("BMKG", "refill", time.Now().UTC())
+
+	shard := placement.Shard(h.HazardID)
+	if _, err := c.Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: h.IngestedAt, Events: []HazardEvent{h}}); err != nil {
+		t.Fatal(err)
+	}
+
+	table, _, _ := c.Placement.Load(ctx)
+	donor, target := table.Shards[shard][0].Node, table.Shards[shard][1].Node
+	markCopy(t, c, shard, target)
+	// A fenced write that reached only the target is a real event. The donor must not hide it.
+	extra := eventInShard(t, shard, "target-only")
+	if _, err := c.Nodes[target].Shards[shard].Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: extra.IngestedAt, Events: []HazardEvent{extra}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Refill(ctx, shard, target); err != nil {
+		t.Fatal("refill did not converge on the union of both copies", err)
+	}
+
+	if state := copyState(t, c, shard, target); state != "serving" {
+		t.Fatal("verified target not promoted", state)
+	}
+
+	exists, err := c.Nodes[donor].Shards[shard].contains(ctx, extra.HazardID)
+	if err != nil || !exists {
+		t.Fatal("target-only event missing from donor after refill", exists, err)
+	}
+}
+
+func TestRefillRejectsConflictingRowsAtSameRevision(t *testing.T) {
 	c := dataCluster(t)
 	ctx := context.Background()
 	h := contractEvent("BMKG", "refill", time.Now().UTC())
@@ -115,14 +148,12 @@ func TestRefillRejectsDifferingDigests(t *testing.T) {
 	table, _, _ := c.Placement.Load(ctx)
 	target := table.Shards[shard][1].Node
 	markCopy(t, c, shard, target)
-	// An extra target row cannot be fixed by upsert and must fail verification.
-	extra := eventInShard(t, shard, "target-only")
-	if _, err := c.Nodes[target].Shards[shard].Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: extra.IngestedAt, Events: []HazardEvent{extra}}); err != nil {
-		t.Fatal(err)
-	}
+	// Same revision with different content has no safe winner, so verification must fail.
+	store := c.Nodes[target].Shards[shard]
+	execData(t, store, `UPDATE `+store.namespace+`.hazard_events SET area_name='conflict' WHERE hazard_id='`+h.HazardID+`'`)
 
 	if err := c.Refill(ctx, shard, target); err == nil {
-		t.Fatal("refill accepted different digests")
+		t.Fatal("refill accepted conflicting copies")
 	}
 
 	if state := copyState(t, c, shard, target); state != "refilling" {
@@ -353,10 +384,10 @@ func TestDataIntegrationRecoveryContinuesAfterRefillFailure(t *testing.T) {
 		markCopy(t, c, shard, "b")
 	}
 
-	extra := eventInShard(t, bad, "extra")
-	if _, err := c.Nodes["b"].Shards[bad].Upsert(ctx, WriteBatch{Source: "BMKG", Epoch: 1, Now: extra.IngestedAt, Events: []HazardEvent{extra}}); err != nil {
-		t.Fatal(err)
-	}
+	// A conflicting row at the same revision has no safe winner, so this refill fails.
+	conflict := eventInShard(t, bad, "recovery")
+	store := c.Nodes["b"].Shards[bad]
+	execData(t, store, `UPDATE `+store.namespace+`.hazard_events SET area_name='conflict' WHERE hazard_id=$1`, conflict.HazardID)
 
 	if err := c.RecoverOnce(ctx); err == nil {
 		t.Fatal("bad refill not reported")
