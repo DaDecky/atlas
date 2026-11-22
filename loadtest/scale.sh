@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Changes the Aggregator during a sustained k6 run. Start it together with SCENARIO=sustained.
 # scale:   P2 criterion 6 moves from 3 to 5 to 2 instances.
-# rollout: P2 criterion 8 swaps the image to the given tag.
+# rollout: P2 criterion 8 swaps the image to the given tag. Pair it with SCENARIO=rollout.
 set -eu
 
 namespace=sistem-informasi-kebencanaan-bnpb
