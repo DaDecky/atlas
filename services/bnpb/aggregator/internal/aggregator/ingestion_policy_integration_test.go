@@ -257,6 +257,7 @@ func TestIntegrationNetworkCutBodyRecoversAfterCleanRefetch(t *testing.T) {
 			// Promise more bytes than are sent, so the client sees the connection drop mid-body.
 			w.Header().Set("Content-Length", "100000")
 			_, _ = w.Write(append(append([]byte("["), good...), ','))
+
 			return
 		}
 

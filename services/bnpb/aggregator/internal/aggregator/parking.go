@@ -73,6 +73,10 @@ const parkingChunkBytes = 256 << 10
 
 var errInvalidParkingCursor = errors.New("invalid parking cursor")
 
+// ErrRefetched tells replay that a parked body was superseded by a later clean poll of
+// the same path. The message is recovered without writing an event of its own.
+var ErrRefetched = errors.New("body refetched by a later clean poll")
+
 func scanParked(row pgx.Row) (ParkedMessage, error) {
 	var m ParkedMessage
 
@@ -459,10 +463,6 @@ func RunParkingRetries(ctx context.Context, p Parking, source string, epoch int6
 }
 
 // nextParkingStatus decides where a message goes after attempt number attempts, counting the first park as 0.
-// ErrRefetched tells replay that a parked body was superseded by a later clean poll of
-// the same path. The message is recovered without writing an event of its own.
-var ErrRefetched = errors.New("body refetched by a later clean poll")
-
 func nextParkingStatus(retryable, failed bool, attempts int, now time.Time) (string, *time.Time) {
 	if !failed {
 		return parkingRecovered, nil

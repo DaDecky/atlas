@@ -71,6 +71,7 @@ func (m *Metrics) push(ctx context.Context, target string, interval time.Duratio
 	u.RawQuery = q.Encode()
 
 	client := &http.Client{Timeout: 2 * time.Second}
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

@@ -27,6 +27,7 @@ func TestAlertOutcomesArePushedAsMetrics(t *testing.T) {
 	}
 
 	got := make(chan string, 1)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		select {

@@ -49,27 +49,6 @@ type Poller struct {
 	cleanAt map[string]time.Time
 }
 
-func (p *Poller) markClean(path string, at time.Time) {
-	p.cleanMu.Lock()
-	defer p.cleanMu.Unlock()
-
-	if p.cleanAt == nil {
-		p.cleanAt = map[string]time.Time{}
-	}
-
-	if at.After(p.cleanAt[path]) {
-		p.cleanAt[path] = at
-	}
-}
-
-// refetchedSince reports whether path was read cleanly after t.
-func (p *Poller) refetchedSince(path string, t time.Time) bool {
-	p.cleanMu.Lock()
-	defer p.cleanMu.Unlock()
-
-	return p.cleanAt[path].After(t)
-}
-
 type oversizedBody struct {
 	file *os.File
 }
@@ -484,4 +463,25 @@ func (p *Poller) Run(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (p *Poller) markClean(path string, at time.Time) {
+	p.cleanMu.Lock()
+	defer p.cleanMu.Unlock()
+
+	if p.cleanAt == nil {
+		p.cleanAt = map[string]time.Time{}
+	}
+
+	if at.After(p.cleanAt[path]) {
+		p.cleanAt[path] = at
+	}
+}
+
+// refetchedSince reports whether path was read cleanly after t.
+func (p *Poller) refetchedSince(path string, t time.Time) bool {
+	p.cleanMu.Lock()
+	defer p.cleanMu.Unlock()
+
+	return p.cleanAt[path].After(t)
 }
