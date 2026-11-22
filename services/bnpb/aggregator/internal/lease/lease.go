@@ -57,6 +57,11 @@ func NewInCluster(namespace string, timing Timing, log *slog.Logger) (*Elector, 
 		return nil, fmt.Errorf("load in-cluster config: %w", err)
 	}
 
+	// Renewals, source checks, and the 100 ms Satellite batch checks share
+	// this limiter when one pod holds several leases. Leave room for all three.
+	config.QPS = 30
+	config.Burst = 60
+
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes client: %w", err)
