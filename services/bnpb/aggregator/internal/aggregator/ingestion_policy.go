@@ -158,6 +158,20 @@ func (p *Poller) DecodeParked(ctx context.Context, m ParkedMessage) (HazardEvent
 	if m.RawCut || m.RawChunked || m.Source != p.Source || len(m.Raw) > defaultMaxSourceBytes {
 		return HazardEvent{}, errors.New("message requires source repair")
 	}
+	// A retryable body was cut by the network, so its bytes are only a prefix of the
+	// array and can never decode. The next clean read of the same path refetches it.
+	if m.Retryable {
+		path := pollerSources[p.Source].path
+		if strings.HasPrefix(m.ReasonCode, "warning_") {
+			path = "/tsunami-warnings"
+		}
+
+		if p.refetchedSince(path, m.ReceivedAt) {
+			return HazardEvent{}, ErrRefetched
+		}
+
+		return HazardEvent{}, errors.New("awaiting a clean refetch")
+	}
 
 	var object Object
 

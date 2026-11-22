@@ -314,6 +314,10 @@ func (c *Cluster) replayOne(ctx context.Context, source string, epoch int64, m P
 		err = errors.New("truncated message requires refetch")
 	}
 
+	if errors.Is(err, ErrRefetched) {
+		return true, c.markParking(ctx, source, epoch, m, true)
+	}
+
 	if err != nil {
 		return false, c.markParking(ctx, source, epoch, m, false)
 	}

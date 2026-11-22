@@ -305,3 +305,101 @@ func TestDataIntegrationFieldReportsDuringHolderReplacement(t *testing.T) {
 
 	t.Log("all 60 reports acknowledged during replacement remained on both final holders")
 }
+
+func TestIntegrationFieldReportContractViolationIsDeadLetteredNotLooped(t *testing.T) {
+	s := integrationStore(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	url := os.Getenv("TEST_RABBITMQ_URL")
+	if url == "" {
+		t.Fatal("run make integration with RabbitMQ")
+	}
+
+	conn, err := amqp.Dial(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = DeclareFieldReports(ch); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = declareDeadReports(ch); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, q := range []string{FieldReportsQueue, FieldReportsDeadQueue} {
+		if _, err = ch.QueuePurge(q, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err = ch.Confirm(false); err != nil {
+		t.Fatal(err)
+	}
+
+	report := testFieldReport(t)
+	report.ReportID = "report-after-poison"
+	raw, _ := json.Marshal(report)
+
+	// The poison message comes first: before the fix it was requeued forever with prefetch 1.
+	for _, p := range []amqp.Publishing{
+		{MessageId: "poison", Type: "FieldReport", DeliveryMode: amqp.Persistent, Body: []byte(`{"report_id":"poison"`)},
+		{MessageId: report.ReportID, Type: "FieldReport", DeliveryMode: amqp.Persistent, Body: raw},
+	} {
+		confirm, err := ch.PublishWithDeferredConfirmWithContext(ctx, "", FieldReportsQueue, true, false, p)
+		if err != nil || !confirm.Wait() {
+			t.Fatal("publish", err)
+		}
+	}
+
+	consumer := &FieldReportsConsumer{URL: url, Heartbeat: 10 * time.Second, Store: s, Log: testLog()}
+
+	runCtx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+
+	go func() {
+		consumer.Run(runCtx)
+		close(done)
+	}()
+
+	defer func() {
+		stop()
+		<-done
+	}()
+
+	for {
+		var count int
+		if err = s.query.QueryRow(ctx, `SELECT count(*) FROM field_reports_inbox WHERE report_id=$1`, report.ReportID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+
+		if count == 1 {
+			break
+		}
+
+		select {
+		case <-ctx.Done():
+			t.Fatal("valid report stuck behind the poison message")
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	dead, ok, err := ch.Get(FieldReportsDeadQueue, true)
+	if err != nil || !ok || dead.MessageId != "poison" || string(dead.Body) != `{"report_id":"poison"` || dead.Headers["x-dead-reason"] == nil {
+		t.Fatal("poison message not kept in the dead queue", ok, err, dead.MessageId)
+	}
+
+	state, err := ch.QueueDeclarePassive(FieldReportsQueue, true, false, false, false, fieldReportsArgs)
+	if err != nil || state.Messages != 0 {
+		t.Fatal("report queue not drained", state.Messages, err)
+	}
+}

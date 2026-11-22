@@ -253,9 +253,9 @@ func saveEvents(ctx context.Context, tx pgx.Tx, batch WriteBatch, checkpoint *ti
 		UPDATE source_progress
 		SET checkpoint = CASE WHEN $2::timestamptz IS NULL THEN checkpoint
 				ELSE GREATEST(checkpoint, $2::timestamptz) END,
-			last_success_at = $3,
-			stale_since = NULL
-		WHERE source = $1`, source, checkpoint, now)
+			last_success_at = CASE WHEN $4 THEN last_success_at ELSE $3 END,
+			stale_since = CASE WHEN $4 THEN COALESCE(stale_since, $3) ELSE NULL END
+		WHERE source = $1`, source, checkpoint, now, batch.Degraded)
 	if err != nil {
 		return nil, err
 	}

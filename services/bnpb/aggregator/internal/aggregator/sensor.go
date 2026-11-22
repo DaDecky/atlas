@@ -119,7 +119,7 @@ func (p *SensorPoller) Poll(ctx context.Context, id string) (bool, error) {
 
 	health.Violations += unknown
 
-	if err = p.commit(ctx, events, offset, sensorState{Cursor: page.NextCursor, Last: last}, received); err != nil {
+	if err = p.commit(ctx, events, offset, sensorState{Cursor: page.NextCursor, Last: last}, health.Degraded(), received); err != nil {
 		return false, err
 	}
 
@@ -227,7 +227,7 @@ func coastalEvent(o sensor.Observation, station sensor.Station, received time.Ti
 	}
 }
 
-func (p *SensorPoller) commit(ctx context.Context, events []HazardEvent, offset int64, state sensorState, now time.Time) error {
+func (p *SensorPoller) commit(ctx context.Context, events []HazardEvent, offset int64, state sensorState, degraded bool, now time.Time) error {
 	if p.Guard != nil {
 		if err := p.Guard(ctx); err != nil {
 			return err
@@ -239,7 +239,7 @@ func (p *SensorPoller) commit(ctx context.Context, events []HazardEvent, offset 
 		return fmt.Errorf("encode sensor state: %w", err)
 	}
 
-	batch := WriteBatch{Source: SourceSensorPantai, Epoch: p.Ingest.WriterEpoch, Events: events, Now: now}
+	batch := WriteBatch{Source: SourceSensorPantai, Epoch: p.Ingest.WriterEpoch, Events: events, Now: now, Degraded: degraded}
 	if _, err = p.Ingest.Data.CommitState(ctx, batch, StreamState{Offset: offset + 1, Payload: payload}); err != nil {
 		return fmt.Errorf("commit sensor page: %w", err)
 	}

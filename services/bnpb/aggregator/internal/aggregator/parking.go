@@ -73,6 +73,10 @@ const parkingChunkBytes = 256 << 10
 
 var errInvalidParkingCursor = errors.New("invalid parking cursor")
 
+// ErrRefetched tells replay that a parked body was superseded by a later clean poll of
+// the same path. The message is recovered without writing an event of its own.
+var ErrRefetched = errors.New("body refetched by a later clean poll")
+
 func scanParked(row pgx.Row) (ParkedMessage, error) {
 	var m ParkedMessage
 
@@ -349,6 +353,12 @@ func replayInTx(ctx context.Context, tx pgx.Tx, source string, m ParkedMessage, 
 	h, err := decode(m)
 	if m.RawCut {
 		err = errors.New("truncated input requires refetch")
+	}
+
+	if errors.Is(err, ErrRefetched) {
+		_, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET status='recovered',attempts=attempts+1,next_attempt_at=NULL WHERE message_id=$1`, m.MessageID)
+
+		return err == nil, err
 	}
 
 	if err != nil {

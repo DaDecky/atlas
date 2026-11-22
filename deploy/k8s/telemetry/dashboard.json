@@ -79,6 +79,31 @@
     {
       "panels": [
         {
+          "title": "Field alerts per second by outcome (notifier)",
+          "width": 4,
+          "expr": [
+            "sum(rate(atlas_notifier_alerts_total[1m])) by (outcome)"
+          ]
+        },
+        {
+          "title": "Field alert mean ingest-to-delivery (seconds)",
+          "width": 4,
+          "expr": [
+            "sum(rate(atlas_notifier_delivery_latency_seconds_sum[5m])) / sum(rate(atlas_notifier_delivery_latency_seconds_count[5m]))"
+          ]
+        },
+        {
+          "title": "Notifier connected to broker",
+          "width": 4,
+          "expr": [
+            "max((atlas_notifier_broker_connected >= 0) and (time() - timestamp(atlas_notifier_broker_connected) < 15)) by (instance)"
+          ]
+        }
+      ]
+    },
+    {
+      "panels": [
+        {
           "title": "Pending outbox rows per store",
           "width": 4,
           "expr": [

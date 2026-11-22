@@ -209,6 +209,11 @@ def main():
             telemetry = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": name},
                          "spec": {"template": {"spec": {"containers": [{"name": name, "env": env}]}}}}
             patches.append({"target": {"kind": "Deployment", "name": name}, "patch": json.dumps(telemetry)})
+        # The notifier serves no HTTP traffic, so it pushes its alert counters instead of OTLP.
+        push = [{"name": "METRICS_PUSH_URL", "value": "http://victoriametrics:8428/api/v1/import/prometheus"}]
+        notifier = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "notifier"},
+                    "spec": {"template": {"spec": {"containers": [{"name": "notifier", "env": push}]}}}}
+        patches.append({"target": {"kind": "Deployment", "name": "notifier"}, "patch": json.dumps(notifier)})
     if args.enable_ingestion:
         ingest = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "aggregator"},
                   "spec": {"template": {"spec": {"containers": [{"name": "aggregator", "env": [{"name": "INGESTION_DISABLED", "value": "0"}]}]}}}}

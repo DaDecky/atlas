@@ -31,10 +31,13 @@ type ShardStore interface {
 // WriteBatch belongs to exactly one source and one sealed writer epoch.
 // Now is the successful ingestion time, supplied by the caller for reproducibility.
 type WriteBatch struct {
-	Source             string
-	Epoch              int64
-	Events             []HazardEvent
-	Now                time.Time
+	Source string
+	Epoch  int64
+	Events []HazardEvent
+	Now    time.Time
+	// Degraded commits the batch without calling the source healthy: stale_since keeps
+	// its first value and last_success_at does not move, so staleness accumulates.
+	Degraded           bool
 	sourceLocked       bool
 	timestampsAssigned bool
 }

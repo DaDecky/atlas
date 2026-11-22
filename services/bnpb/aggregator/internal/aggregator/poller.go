@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"atlas/services/bnpb/aggregator/internal/decode"
@@ -41,6 +42,11 @@ type Poller struct {
 	PolicyFile                  string
 	Guard                       func(context.Context) error
 	OnPoll                      func(context.Context, string, time.Duration, error)
+
+	// cleanAt records, per path, when the last body was read to its end without a
+	// body-level failure. A body cut by the network is recovered by that refetch.
+	cleanMu sync.Mutex
+	cleanAt map[string]time.Time
 }
 
 type oversizedBody struct {
@@ -193,6 +199,7 @@ func (p *Poller) decodeRecords(ctx context.Context, path, id string, body io.Rea
 	)
 	defer oversized.remove()
 
+	started := time.Now().UTC()
 	limits := decode.Limits{BodyBytes: min(cmp.Or(p.MaxSourceBytes, defaultMaxSourceBytes), defaultMaxSourceBytes), Records: cmp.Or(p.MaxRecords, defaultMaxSourceRecords), Oversized: &oversized}
 
 	err := decode.Array(body, limits, func(record decode.Record) error {
@@ -206,6 +213,7 @@ func (p *Poller) decodeRecords(ctx context.Context, path, id string, body io.Rea
 		return nil
 	})
 	if err == nil {
+		p.markClean(path, started)
 		return records, nil
 	}
 
@@ -455,4 +463,25 @@ func (p *Poller) Run(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (p *Poller) markClean(path string, at time.Time) {
+	p.cleanMu.Lock()
+	defer p.cleanMu.Unlock()
+
+	if p.cleanAt == nil {
+		p.cleanAt = map[string]time.Time{}
+	}
+
+	if at.After(p.cleanAt[path]) {
+		p.cleanAt[path] = at
+	}
+}
+
+// refetchedSince reports whether path was read cleanly after t.
+func (p *Poller) refetchedSince(path string, t time.Time) bool {
+	p.cleanMu.Lock()
+	defer p.cleanMu.Unlock()
+
+	return p.cleanAt[path].After(t)
 }

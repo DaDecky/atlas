@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	AMQPURL, StatePath, HealthAddr string
+	MetricsPushURL                 string
 	Prefetch                       int
 
 	HTTPReadHeaderTimeout, HTTPReadTimeout, HTTPWriteTimeout, HTTPIdleTimeout, ShutdownTimeout time.Duration
@@ -40,7 +41,9 @@ func ConfigFromEnv() (Config, error) {
 		AMQPURL:    os.Getenv("AMQP_URL"),
 		StatePath:  os.Getenv("CONSUMER_STATE_PATH"),
 		HealthAddr: os.Getenv("CONSUMER_HEALTH_ADDR"),
-		Prefetch:   defaultPrefetch,
+		// Optional: a VictoriaMetrics /api/v1/import/prometheus URL.
+		MetricsPushURL: os.Getenv("METRICS_PUSH_URL"),
+		Prefetch:       defaultPrefetch,
 	}
 
 	if c.AMQPURL == "" {
