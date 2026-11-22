@@ -73,7 +73,7 @@ The demo cluster has three k3s nodes with separate kernels. The node names are p
 | `atlas-node-b` | VM | worker | TODO | TODO |
 | `atlas-node-c` | VM | worker | TODO | TODO |
 
-The node IPs are `10.0.0.40` to `10.0.0.42`, and pods use the k3s default `10.42.0.0/16`. The demo overlay places the workloads as follows.
+The node IPs are `10.0.0.40` to `10.0.0.42`, and pods use the k3s default `10.42.0.0/16`. The demo overlay's store NetworkPolicies allow these addresses, so a cluster with other node IPs must update them in `deploy/k8s/overlays/demo/kustomization.yaml`. The demo overlay places the workloads as follows.
 
 | Component | Replicas | Placement |
 |---|---|---|
@@ -84,6 +84,20 @@ The node IPs are `10.0.0.40` to `10.0.0.42`, and pods use the k3s default `10.42
 | Sensor Pantai | 1 | Scheduler's choice, vendor manifest unmodified |
 | VictoriaMetrics, Jaeger | 1 each | `atlas-node-a`, only with telemetry enabled |
 | Tester Agent | 1 per node | DaemonSet in its own namespace `tester-agent` |
+
+### Create the cluster
+
+Start from three Linux VMs with the IPs above. Install the k3s server on the first node, then join the other two as agents with the token from the server. `K3S_NODE_NAME` sets the node names the overlay expects.
+
+```sh
+# on atlas-node-a
+curl -sfL https://get.k3s.io | K3S_NODE_NAME=atlas-node-a sh -
+sudo cat /var/lib/rancher/k3s/server/node-token
+# on atlas-node-b, then atlas-node-c with its own name
+curl -sfL https://get.k3s.io | K3S_URL=https://10.0.0.40:6443 K3S_TOKEN=<node-token> K3S_NODE_NAME=atlas-node-b sh -
+```
+
+Copy `/etc/rancher/k3s/k3s.yaml` from `atlas-node-a` to your machine, replace `127.0.0.1` in it with `10.0.0.40`, and check that `kubectl get nodes` lists the three nodes as `Ready`.
 
 ### Deploy
 
@@ -157,7 +171,7 @@ curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/aud
 curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/checksum
 ```
 
-**P2. Leadership and scaling.** Delete the leader pod, or skew a node's clock with the Tester Agent, and watch the lease move in the Aggregator logs and the `source lease` panel. For the load criteria, run k6 together with `loadtest/scale.sh`. The k6 summary reports throughput from complete HTTP 200 responses only. Partial 200s, 429s, and failed requests are counted separately. A port forward is a single tunnel and caps throughput, so for these runs start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`.
+**P2. Leadership and scaling.** Delete the leader pod, or skew a node's clock with the Tester Agent, and watch the lease move in the Aggregator logs and the `Active source lease holder` panel. For the load criteria, run k6 together with `loadtest/scale.sh`. The k6 summary reports throughput from complete HTTP 200 responses only. Partial 200s, 429s, and failed requests are counted separately. A port forward is a single tunnel and caps throughput, so for these runs start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`.
 
 ```sh
 # Criterion 6: 10,000 VUs while the Aggregator goes from 3 to 5 to 2 instances
@@ -166,12 +180,12 @@ loadtest/scale.sh scale
 # Criterion 7: run once with 1 Aggregator and once with 3, then compare the throughput lines
 kubectl -n $ns scale deployment/aggregator --replicas=1
 k6 run -e SCENARIO=throughput -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js
-# Criterion 8: a version swap under load fails k6 if any request fails
-k6 run -e SCENARIO=rollout -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
+# Criterion 8: a version swap under a steady 200 req/s fails k6 if any request fails
+k6 run -e SCENARIO=rollout -e DURATION=300s -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
 loadtest/scale.sh rollout <new-tag>
 ```
 
-The `rollout` threshold fails on any request that is neither a 200 nor a controlled 429. `STEP_SECONDS` sets the wait between scale steps, and `VUS`, `DURATION`, and `THINK_TIME` size the k6 run.
+Criterion 8 allows no failed request, so the `rollout` scenario counts a 429 as a failure too. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request k6 could not send. `STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
 
 **P3. Unreadable source data.** Switch PVMBG to schema 3, 4, or 5. Payloads that break the contract, including oversized ones, are parked with their reason and full body, and Internal Ops can inspect and replay them. Field Team reports are accepted through `POST /field-reports`.
 
@@ -195,7 +209,7 @@ k6 run -e SCENARIO=overload -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_
   -e FIELD_TEAM_CLIENT_ID=$FIELD_TEAM_CLIENT_ID -e FIELD_TEAM_CLIENT_SECRET=$FIELD_TEAM_CLIENT_SECRET loadtest/m2.js
 ```
 
-The alert path has two objectives: no critical event lost, and 99% of critical events delivered within 5 s. `scripts/error-budget.py` takes the expected critical events from Sensor Pantai itself, so an event lost before Atlas stored it still counts. It matches them with the notifier log and reports how much of each budget a window used.
+The alert path has two objectives: no critical event lost, and 99% of critical events delivered within 5 s. `scripts/error-budget.py` takes the expected critical events from Sensor Pantai itself, so an event lost before Atlas stored it still counts. It matches them with the notifier log and reports how much of each budget a window used. Critical observations that break the base contract are parked by design and reported on their own line. The latency objective uses the notifier's latency from Atlas ingestion, and the report adds the time from `observed_at` to delivery.
 
 ```sh
 kubectl -n $ns logs deploy/notifier --since=2h | python scripts/error-budget.py --sensor http://localhost:18080 --since 2026-11-22T10:00:00Z

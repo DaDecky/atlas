@@ -37,8 +37,18 @@ const sustained = {
 const scenarios = {
   // P2 criterion 6: 10,000 users for at least 120 s while scale.sh moves the Aggregator from 3 to 5 to 2 instances.
   sustained,
-  // P2 criterion 8: the same load while scale.sh rollout swaps the Aggregator version. No request may fail.
-  rollout: sustained,
+  // P2 criterion 8: a steady open load below capacity while scale.sh rollout swaps the Aggregator version.
+  // Criterion 8 exempts nothing, so a 429 counts as a failed request here.
+  rollout: {
+    media: {
+      executor: 'constant-arrival-rate',
+      exec: 'mediaRead',
+      rate: Number(__ENV.RATE || 200),
+      timeUnit: '1s',
+      duration,
+      preAllocatedVUs: Number(__ENV.VUS || 400),
+    },
+  },
   // P2 criterion 7: a saturating closed load, run once at one instance and once at three.
   throughput: { media: { executor: 'constant-vus', exec: 'mediaRead', vus: Number(__ENV.VUS || 500), duration } },
   // Latency figures with an open model, so a slow system cannot lower the arrival rate.
@@ -61,7 +71,8 @@ const scenarios = {
 
 const thresholds = {
   sustained: { unexpected_errors: ['rate<0.01'] },
-  rollout: { failed_requests: ['count==0'] },
+  // dropped_iterations are requests k6 could not send because every VU was busy waiting.
+  rollout: { failed_requests: ['count==0'], rejected_responses: ['count==0'], dropped_iterations: ['count==0'] },
   throughput: { unexpected_errors: ['rate<0.01'] },
   latency: { unexpected_errors: ['rate<0.01'] },
   overload: { 'rejections{class:field}': ['rate<0.01'], 'rejections{class:media}': ['rate>0'] },
