@@ -71,7 +71,7 @@ func (c *Cluster) Refill(ctx context.Context, shard, target string) (err error) 
 	// leaving the target non-serving if verification cannot establish equality.
 	verified := false
 
-	for range 5 {
+	for range c.Limits.RefillAttempts {
 		a, err := shardDigest(ctx, source)
 		if err != nil {
 			return err
@@ -567,22 +567,13 @@ func (c *Cluster) prepareNode(ctx context.Context, t placement.Table, node strin
 }
 
 func (c *Cluster) reachableDonor(ctx context.Context, t placement.Table, shard, old string) bool {
-	for _, holder := range t.Shards[shard] {
-		if holder.Node == old || holder.State != placement.Serving || c.Nodes[holder.Node] == nil {
-			continue
-		}
+	others := slices.DeleteFunc(slices.Clone(t.Shards[shard]), func(holder placement.Copy) bool { return holder.Node == old })
 
-		call, cancel := c.timeout(ctx)
-		_, err := c.copyStore(holder, shard).Read(call, Query{Limit: 1})
+	_, err := readCopies(ctx, c, others, shard, 0, func(call context.Context, s *Store) (Response, error) {
+		return s.Read(call, Query{Limit: 1})
+	})
 
-		cancel()
-
-		if err == nil {
-			return true
-		}
-	}
-
-	return false
+	return err == nil
 }
 
 // replaceHolder puts node in place of old as a copy that is behind until its refill.

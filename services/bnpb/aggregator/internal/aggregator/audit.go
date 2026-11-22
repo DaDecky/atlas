@@ -310,30 +310,17 @@ func (c *Cluster) Checksum(ctx context.Context, source string) (Checksum, error)
 	missing := []string{}
 
 	for shard, copies := range t.Shards {
-		found := false
-
-		for _, holder := range copies {
-			if holder.State != placement.Serving || c.Nodes[holder.Node] == nil {
-				continue
-			}
-
-			s := c.copyStore(holder, shard)
-			call, cancel := c.timeout(ctx)
+		answered, answerErr := answeringCopy(ctx, c, copies, shard, func(call context.Context, s *Store) error {
 			_, err := s.references(call, source, "", true)
 
-			cancel()
-
-			if err == nil {
-				stores[shard] = s
-				found = true
-
-				break
-			}
-		}
-
-		if !found {
+			return err
+		})
+		if answerErr != nil {
 			missing = append(missing, shard)
+			continue
 		}
+
+		stores[shard] = answered
 	}
 
 	result, err := checksumStores(ctx, source, stores)
@@ -375,6 +362,8 @@ func (s *Store) Location(ctx context.Context, id string) (LocationResult, error)
 	return r, nil
 }
 
+// Location reports every copy that holds the event. It visits each copy, so it cannot use readCopies,
+// which stops at the first copy that answers.
 func (c *Cluster) Location(ctx context.Context, id string) (LocationResult, error) {
 	r := LocationResult{HazardID: id, Locations: []Location{}}
 

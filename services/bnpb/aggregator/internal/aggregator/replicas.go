@@ -177,6 +177,14 @@ func readCopies[T any](ctx context.Context, c *Cluster, copies []placement.Copy,
 	return zero, last
 }
 
+// answeringCopy returns the first serving copy of a shard whose store passes the probe, so the
+// caller keeps reading from the store that answered. It hedges like readCopies.
+func answeringCopy(ctx context.Context, c *Cluster, copies []placement.Copy, shard string, probe func(context.Context, *Store) error) (*Store, error) {
+	return readCopies(ctx, c, copies, shard, 0, func(call context.Context, s *Store) (*Store, error) {
+		return s, probe(call, s)
+	})
+}
+
 func readMetadata[T any](ctx context.Context, c *Cluster, source string, read func(context.Context, *Store) (T, error)) (T, error) {
 	t, _, err := c.Placement.Load(ctx)
 	if err != nil {
