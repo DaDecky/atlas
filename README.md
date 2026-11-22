@@ -18,7 +18,7 @@ M2 runs every BNPB component on Kubernetes in the namespace `sistem-informasi-ke
 
 ### 1.1 Topology
 
-The demo cluster has three k3s nodes with separate kernels. The node names are part of the deployment, because the overlay pins most services (all except the Aggregator and Client API) to `atlas-node-a` and the data placement map is computed from the three names.
+The demo cluster has three k3s nodes with separate kernels. The node names are part of the deployment, because the overlay pins the services marked below to `atlas-node-a` and the data placement map is computed from the three names.
 
 | Node | Kind | k3s role | VM size | Physical host | Host CPU and RAM |
 |---|---|---|---|---|---|
