@@ -1,6 +1,7 @@
 package clientapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -281,39 +282,28 @@ func (a *API) validateCurrent(ctx context.Context, claims AccessClaims, id strin
 	return http.StatusOK, ""
 }
 
-func summaryData(raw json.RawMessage) (json.RawMessage, error) {
-	var events []json.RawMessage
-	if err := json.Unmarshal(raw, &events); err != nil {
-		return nil, err
-	}
-
-	filtered := make([]map[string]json.RawMessage, 0, len(events))
-	for _, eventRaw := range events {
-		var event map[string]json.RawMessage
-		if err := json.Unmarshal(eventRaw, &event); err != nil {
-			return nil, err
-		}
-
+// projectSummary reduces the already decoded events to the public summary fields.
+func projectSummary(events []map[string]json.RawMessage) error {
+	for _, event := range events {
 		if event == nil {
-			return nil, errors.New("invalid event")
+			return errors.New("invalid event")
 		}
 
-		out := make(map[string]json.RawMessage, len(summaryFields))
 		for key, value := range event {
-			if summaryFields[key] {
-				var text string
-				if string(value) == "null" || json.Unmarshal(value, &text) != nil {
-					return nil, errors.New("invalid summary field")
-				}
+			if !summaryFields[key] {
+				delete(event, key)
+				continue
+			}
 
-				out[key] = value
+			// The envelope decoder already checked the JSON syntax.
+			value = bytes.TrimSpace(value)
+			if len(value) == 0 || value[0] != '"' {
+				return errors.New("invalid summary field")
 			}
 		}
-
-		filtered = append(filtered, out)
 	}
 
-	return json.Marshal(filtered)
+	return nil
 }
 
 // publicEnvelope excludes unknown fields and dependency diagnostics from public responses.
@@ -339,13 +329,14 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 		return nil, err
 	}
 
+	var publicData any = data
+
 	if summary {
-		filtered, err := summaryData(data)
-		if err != nil {
+		if err := projectSummary(events); err != nil {
 			return nil, err
 		}
 
-		data = filtered
+		publicData = events
 	}
 
 	freshness, err := publicFreshness(sources)
@@ -353,7 +344,7 @@ func publicEnvelope(body []byte, status int, summary bool) ([]byte, error) {
 		return nil, err
 	}
 
-	out := map[string]any{"data": data, "sources": freshness}
+	out := map[string]any{"data": publicData, "sources": freshness}
 
 	for _, key := range []string{"partial", "unavailable_units", "next_cursor"} {
 		raw, exists := envelope[key]

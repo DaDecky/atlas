@@ -48,7 +48,7 @@ func run(log *slog.Logger) error {
 	replay, err := startWorkers(ctx, store, c, launch, otel.Meter(), log)
 	if err == nil {
 		api := &aggregator.API{
-			Store: store, Token: c.InternalToken, Timeout: c.QueryTimeout,
+			Store: store, Token: c.InternalToken, Timeout: c.QueryTimeout, ReadCacheTTL: c.ReadCacheTTL,
 			Admission: aggregator.NewAdmission(c.QueryCapacity, c.FieldReservedPercent), Log: log,
 			OnAdmissionReject: otel.AdmissionRejections(log),
 		}
