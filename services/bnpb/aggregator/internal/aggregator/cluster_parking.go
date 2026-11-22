@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -63,69 +65,43 @@ func (c *Cluster) listUnprocessed(ctx context.Context, source, cursor string, li
 	if cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(cursor)
 		if err != nil || json.Unmarshal(raw, &after) != nil || after.ID == "" || after.Source != source {
-			return out, errors.New("invalid cursor")
+			return out, errInvalidParkingCursor
 		}
 	}
 
-	items, cutoff, err := c.sourceParking(ctx, source, cursor, after, limit)
+	table, _, err := c.Placement.Load(ctx)
 	if err != nil {
 		return out, err
 	}
 
-	if publications {
-		items = append(items, c.publicationParking(ctx, source, cursor, limit)...)
-	}
-
-	out.Items = cutParking(mergeParking(items), cutoff)
-
-	if len(out.Items) > limit {
-		out.Items = out.Items[:limit]
-	}
-	// An exactly full merged page may still have more items; returning one extra
-	// empty page is safe and avoids skipping per-source continuation.
-	if len(out.Items) > 0 && (len(out.Items) == limit || cutoff != nil) {
-		last := out.Items[len(out.Items)-1]
-		raw, _ := json.Marshal(parkingCursor{Time: last.ReceivedAt, ID: last.MessageID, Source: source})
-		next := base64.RawURLEncoding.EncodeToString(raw)
-		out.NextCursor = &next
-	}
-
-	return out, nil
-}
-
-// sourceParking reads one page per source and returns the earliest last item of a page
-// that has more, since nothing after it is complete in the merged page.
-func (c *Cluster) sourceParking(ctx context.Context, source, cursor string, after parkingCursor, limit int) ([]ParkedMessage, *ParkedMessage, error) {
 	requested := []string{source}
 	if source == "" {
 		requested = Sources
 	}
 
 	var (
-		items  []ParkedMessage
-		cutoff *ParkedMessage
+		items   []ParkedMessage
+		cutoff  *ParkedMessage
+		readErr error
+		reads   int
+		mu      sync.Mutex
+		wg      sync.WaitGroup
 	)
 
-	for _, src := range requested {
-		// Local cursor filters the same global timestamp/ID, but binds the source.
-		local := ""
-
-		if cursor != "" {
-			value := after
-			value.Source = src
-			raw, _ := json.Marshal(value)
-			local = base64.RawURLEncoding.EncodeToString(raw)
-		}
-
-		page, err := readMetadata(ctx, c, src, func(call context.Context, s *Store) (ParkingPage, error) {
-			return s.ListUnprocessed(call, src, local, limit)
-		})
+	// The earliest continuation across the units bounds the merged page.
+	addPage := func(unit string, page ParkingPage, err error) {
+		mu.Lock()
+		defer mu.Unlock()
 		if err != nil {
-			return nil, nil, err
+			readErr = err
+
+			out.UnavailableUnits = append(out.UnavailableUnits, unit)
+
+			return
 		}
 
+		reads++
 		items = append(items, page.Items...)
-
 		if page.NextCursor != nil && len(page.Items) > 0 {
 			last := page.Items[len(page.Items)-1]
 			if cutoff == nil || parkedBefore(last, *cutoff) {
@@ -134,26 +110,61 @@ func (c *Cluster) sourceParking(ctx context.Context, source, cursor string, afte
 		}
 	}
 
-	return items, cutoff, nil
-}
+	for _, src := range requested {
+		wg.Go(func() {
+			local := ""
 
-// publicationParking reads publication failures, which live beside each node's outbox,
-// not in source shards. An unreachable node is skipped.
-func (c *Cluster) publicationParking(ctx context.Context, source, cursor string, limit int) []ParkedMessage {
-	var items []ParkedMessage
+			if cursor != "" {
+				value := after
+				value.Source = src
+				raw, _ := json.Marshal(value)
+				local = base64.RawURLEncoding.EncodeToString(raw)
+			}
 
-	for _, node := range c.Nodes {
-		call, cancel := c.timeout(ctx)
-		page, err := node.Store.ListUnprocessed(call, source, cursor, limit)
+			shard := placement.Shard("metadata:" + src)
+			page, err := readCopies(ctx, c, table.Shards[shard], shard, 0, func(call context.Context, s *Store) (ParkingPage, error) {
+				return s.ListUnprocessed(call, src, local, limit)
+			})
+			addPage(shard, page, err)
+		})
+	}
 
-		cancel()
+	if publications {
+		// Publication failures live in each node's public schema beside its outbox.
+		for name, node := range c.Nodes {
+			wg.Go(func() {
+				call, cancel := c.timeout(ctx)
+				defer cancel()
 
-		if err == nil {
-			items = append(items, page.Items...)
+				page, err := node.Store.ListUnprocessed(call, source, cursor, limit)
+				addPage(name+"/public", page, err)
+			})
 		}
 	}
 
-	return items
+	wg.Wait()
+
+	if reads == 0 || !publications && readErr != nil {
+		return out, readErr
+	}
+
+	slices.Sort(out.UnavailableUnits)
+	out.UnavailableUnits = slices.Compact(out.UnavailableUnits)
+	out.Partial = len(out.UnavailableUnits) > 0
+
+	out.Items = cutParking(mergeParking(items), cutoff)
+	if len(out.Items) > limit {
+		out.Items = out.Items[:limit]
+	}
+	// A full page may need an extra request to confirm the end.
+	if len(out.Items) > 0 && (len(out.Items) == limit || cutoff != nil) {
+		last := out.Items[len(out.Items)-1]
+		raw, _ := json.Marshal(parkingCursor{Time: last.ReceivedAt, ID: last.MessageID, Source: source})
+		next := base64.RawURLEncoding.EncodeToString(raw)
+		out.NextCursor = &next
+	}
+
+	return out, nil
 }
 
 // mergeParking keeps the copy of each message with the most attempts, in received order.

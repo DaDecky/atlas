@@ -31,9 +31,13 @@ type ParkedMessage struct {
 }
 
 type ParkingPage struct {
-	Items      []ParkedMessage `json:"items"`
-	NextCursor *string         `json:"next_cursor"`
+	Items            []ParkedMessage `json:"items"`
+	NextCursor       *string         `json:"next_cursor"`
+	Partial          bool            `json:"partial,omitempty"`
+	UnavailableUnits []string        `json:"unavailable_units,omitempty"`
 }
+
+var errInvalidParkingCursor = errors.New("invalid parking cursor")
 
 type Parking interface {
 	Park(context.Context, ParkedMessage) error
@@ -122,7 +126,7 @@ func (s *Store) ListUnprocessed(ctx context.Context, source, cursor string, limi
 	if cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(cursor)
 		if err != nil || json.Unmarshal(raw, &after) != nil || after.ID == "" || after.Source != source {
-			return page, errors.New("invalid parking cursor")
+			return page, errInvalidParkingCursor
 		}
 	}
 

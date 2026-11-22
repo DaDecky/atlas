@@ -1,6 +1,9 @@
 package aggregator
 
-import "net/http"
+import (
+	"errors"
+	"net/http"
+)
 
 func (a *AuditAPI) unprocessed(w http.ResponseWriter, r *http.Request) {
 	if len(r.URL.Query()["cursor"]) > 1 {
@@ -30,7 +33,11 @@ func (a *AuditAPI) unprocessed(w http.ResponseWriter, r *http.Request) {
 
 	page, err := a.Parking.ListUnprocessed(r.Context(), q.Source, cursor, q.Limit)
 	if err != nil {
-		auditError(w, 400, "bad_request", err.Error())
+		if errors.Is(err, errInvalidParkingCursor) {
+			auditError(w, 400, "bad_request", err.Error())
+		} else {
+			auditError(w, 503, "unavailable", "parking unavailable")
+		}
 		return
 	}
 
@@ -39,5 +46,11 @@ func (a *AuditAPI) unprocessed(w http.ResponseWriter, r *http.Request) {
 		items = append(items, map[string]any{"message_id": m.MessageID, "source": m.Source, "received_at": m.ReceivedAt, "reason": m.Reason, "retryable": m.Retryable, "attempts": m.Attempts, "status": m.Status})
 	}
 
-	writeJSON(w, 200, map[string]any{"items": items, "next_cursor": page.NextCursor})
+	result := map[string]any{"items": items, "next_cursor": page.NextCursor}
+	if page.Partial {
+		result["partial"] = true
+		result["unavailable_units"] = page.UnavailableUnits
+	}
+
+	writeJSON(w, 200, result)
 }
