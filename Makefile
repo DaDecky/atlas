@@ -35,6 +35,7 @@ help:
 	@echo "make logs         Follow Compose logs"
 	@echo "make integration  Test services with disposable PostgreSQL and RabbitMQ"
 	@echo "make deploy       Build and deploy Kustomize; pass context/options in DEPLOY_ARGS"
+	@echo "make deploy-demo  Deploy the k3s demo with ingestion and telemetry; pass cluster options in DEPLOY_ARGS"
 	@echo "make demo         Check every spec criterion on Compose. P=P3 runs one problem, LOAD=1 adds k6, KEEP=1 keeps the stack"
 
 env:
@@ -88,9 +89,12 @@ logs:
 integration:
 	./scripts/integration.sh
 
-.PHONY: deploy
+.PHONY: deploy deploy-demo
 deploy:
 	python scripts/deploy-k8s.py --build $(DEPLOY_ARGS)
+
+deploy-demo:
+	python scripts/deploy-k8s.py --build --overlay demo --enable-ingestion --enable-telemetry $(DEPLOY_ARGS)
 
 DEMO_RUN = TestDemo$(if $(P),/$(P))
 
