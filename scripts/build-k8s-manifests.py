@@ -121,7 +121,7 @@ def main():
     write("base/kustomization.yaml", kustomization)
     write("vendor/sensor-pantai/kustomization.yaml", {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["manifest.yaml"]})
     write("overlays/dev/kustomization.yaml", {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["../../base"], "replicas": [{"name": "canonical-store", "count": 1}], "patches": [{"target": {"kind": "StatefulSet", "name": "canonical-store"}, "patch": json.dumps([{"op": "remove", "path": "/spec/volumeClaimTemplates/0/spec/storageClassName"}])}]})
-    pin = {"target": {"kind": "Deployment", "name": "auth|client-api|bmkg|pvmbg|consumer-a|consumer-b|notifier"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"kubernetes.io/hostname": "atlas-node-a"}}])}
+    pin = {"target": {"kind": "Deployment", "name": "auth|bmkg|pvmbg|consumer-a|consumer-b|notifier"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {"kubernetes.io/hostname": "atlas-node-a"}}])}
     host_addresses = ["10.0.0." + str(host) for host in [40, 41, 42]] + ["10.42." + str(subnet) + "." + str(host) for subnet in [0, 2, 4] for host in [0, 1]]
     host_patch = {"target": {"kind": "NetworkPolicy", "name": "canonical-store-owner|auth-db-owner|bmkg-db-owner|pvmbg-db-owner"}, "patch": json.dumps([{"op": "add", "path": "/spec/ingress/0/from/-", "value": {"ipBlock": {"cidr": address + "/32"}}} for address in host_addresses])}
     # The existing Proxmox Tester Agent uses host networking in dev as well.
