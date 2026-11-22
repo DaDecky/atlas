@@ -49,9 +49,20 @@ def read_groups(path):
             "area_name": row.get("area_name"),
             "occurred_at": row.get("occurred_at"),
             "satellites": sorted(attributes["satellites"]) if "satellites" in attributes else None,
-            "highest_confidence": attributes.get("highest_confidence"),
+            "max_confidence": max_confidence(attributes),
         }
     return groups
+
+
+def max_confidence(attributes):
+    if "max_confidence" in attributes:
+        return attributes["max_confidence"]
+    legacy = attributes.get("highest_confidence")
+    if legacy is None:
+        return None
+    if not isinstance(legacy, str):
+        raise ValueError("highest_confidence must be a string")
+    return {"low": "l", "nominal": "n", "high": "h"}.get(legacy, legacy)
 
 
 def compare(actual, expected):

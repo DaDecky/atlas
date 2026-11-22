@@ -17,6 +17,44 @@ type SatelliteSink struct {
 	Reference satellite.Reference
 }
 
+const satelliteConfidenceField = "max_confidence"
+
+func satelliteWireConfidence(confidence string) string {
+	switch confidence {
+	case "low":
+		return "l"
+	case "nominal":
+		return "n"
+	case "high":
+		return "h"
+	default:
+		return confidence
+	}
+}
+
+// Expose the current field on reads of events written before the wire contract fix.
+func normalizeSatelliteConfidence(event *HazardEvent) {
+	if event.Source != "SATELIT" {
+		return
+	}
+
+	legacy, ok := event.Attributes["highest_confidence"]
+	if !ok {
+		return
+	}
+
+	if _, exists := event.Attributes[satelliteConfidenceField]; !exists {
+		var value string
+		if json.Unmarshal(legacy, &value) == nil {
+			legacy, _ = json.Marshal(satelliteWireConfidence(value))
+		}
+
+		event.Attributes[satelliteConfidenceField] = legacy
+	}
+
+	delete(event.Attributes, "highest_confidence")
+}
+
 func (s *SatelliteSink) Load(ctx context.Context) ([]byte, error) {
 	state, err := s.Data.LoadState(ctx, "SATELIT")
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -68,7 +106,7 @@ func (s *SatelliteSink) Commit(ctx context.Context, offset int64, payload []byte
 	for _, fire := range fires {
 		attributes := map[string]json.RawMessage{}
 		for key, value := range map[string]any{
-			"detection_count": fire.Count, "satellites": fire.Satellites, "highest_confidence": fire.HighestConfidence,
+			"detection_count": fire.Count, "satellites": fire.Satellites, satelliteConfidenceField: satelliteWireConfidence(fire.HighestConfidence),
 			"total_frp_mw": fire.TotalFRP, "detection_keys": fire.Keys, "status": fire.Status,
 			"province_reference": s.Reference.Version,
 		} {

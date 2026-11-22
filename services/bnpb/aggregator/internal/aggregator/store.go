@@ -359,6 +359,7 @@ func readEventPage(ctx context.Context, tx pgx.Tx, q Query, cursor pageCursor) (
 			return data, err
 		}
 
+		normalizeSatelliteConfidence(&h)
 		data = append(data, h)
 	}
 

@@ -50,6 +50,51 @@ func satelliteFrames() []satellite.Frame {
 	return frames
 }
 
+func TestIntegrationSatelliteAuditConfidence(t *testing.T) {
+	store := integrationStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	legacy := contractEvent("SATELIT", "legacy", now)
+	legacy.Attributes["highest_confidence"] = json.RawMessage(`"nominal"`)
+	if _, err := store.Upsert(ctx, WriteBatch{Source: "SATELIT", Epoch: 1, Events: []HazardEvent{legacy}, Now: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	reference, err := satellite.LoadReference("")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &SatelliteSink{Data: store, Epoch: 1, Reference: reference}
+	if err = sink.Commit(ctx, 0, []byte(`{}`), []satellite.Fire{{
+		ID: "new", Count: 2, Status: "active", HighestConfidence: "high", Severity: "WASPADA", OccurredAt: now,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stored string
+	if err = store.ingest.QueryRow(ctx, `SELECT attributes->>'max_confidence' FROM hazard_events WHERE source='SATELIT' AND source_ref_id='new'`).Scan(&stored); err != nil || stored != "h" {
+		t.Fatal("new ingest did not persist the wire value", stored, err)
+	}
+
+	audit := (&AuditAPI{Store: store, Token: "audit"}).Handler()
+	response := request(audit, "/internal/audit/events?source=SATELIT", "audit")
+	var page struct {
+		Items []HazardEvent `json:"items"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &page) != nil || len(page.Items) != 2 {
+		t.Fatal("unexpected Audit response", response.Code, response.Body.String())
+	}
+
+	wanted := map[string]string{"legacy": `"n"`, "new": `"h"`}
+	for _, event := range page.Items {
+		if string(event.Attributes["max_confidence"]) != wanted[event.SourceRefID] || event.Attributes["highest_confidence"] != nil {
+			t.Fatal("incorrect Audit confidence", event.SourceRefID, event.Attributes)
+		}
+		delete(wanted, event.SourceRefID)
+	}
+}
+
 func TestIntegrationSatelliteResumeHeartbeatAndLostCommitReply(t *testing.T) {
 	s := integrationStore(t)
 
