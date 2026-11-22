@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -115,6 +118,88 @@ func dataCluster(t *testing.T) *Cluster {
 	}
 
 	return c
+}
+
+func TestDataIntegrationAuditUnprocessedPartial(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	for i, record := range []struct{ id, source string }{
+		{"bmkg", SourceBMKG}, {"pvmbg-one", SourcePVMBG}, {"pvmbg-two", SourcePVMBG},
+	} {
+		message := ParkedMessage{MessageID: record.id, Source: record.source, ReceivedAt: now.Add(time.Duration(i) * time.Second), Raw: []byte("bad"), ReasonCode: "schema_incompatible", Reason: "unknown schema"}
+		if err := c.Park(ctx, message); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	handler := (&AuditAPI{Store: c, Parking: c, Token: "audit"}).Handler()
+	request := func(query string, status int) ParkingPage {
+		t.Helper()
+
+		r := httptest.NewRequest("GET", "/internal/audit/unprocessed"+query, nil)
+		r.Header.Set("Authorization", "Bearer audit")
+
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+
+		if w.Code != status {
+			t.Fatalf("status %d, want %d: %s", w.Code, status, w.Body)
+		}
+
+		var page ParkingPage
+		if err := json.Unmarshal(w.Body.Bytes(), &page); err != nil {
+			t.Fatal(err)
+		}
+
+		return page
+	}
+	failReads := func(store *Store, table string) {
+		t.Helper()
+		execData(t, store, "REVOKE SELECT ON "+table+" FROM aggregator")
+		t.Cleanup(func() { execData(t, store, "GRANT SELECT ON "+table+" TO aggregator") })
+	}
+
+	shard := placement.Shard("metadata:" + SourceBMKG)
+
+	table, _, err := c.Placement.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	copies := table.Shards[shard]
+	first := c.Nodes[copies[0].Node].Shards[shard]
+	failReads(first, first.namespace+".unprocessed_messages")
+
+	if page := request("", 200); page.Partial || len(page.Items) != 3 {
+		t.Fatalf("readable replica should return a complete page: %+v", page)
+	}
+
+	second := c.Nodes[copies[1].Node].Shards[shard]
+	failReads(second, second.namespace+".unprocessed_messages")
+	failReads(c.Nodes["c"].Store, "public.unprocessed_messages")
+
+	page := request("?limit=1", 200)
+	wantUnits := []string{shard, "c/public"}
+	slices.Sort(wantUnits)
+
+	if !page.Partial || !slices.Equal(page.UnavailableUnits, wantUnits) || page.NextCursor == nil || len(page.Items) != 1 || page.Items[0].MessageID != "pvmbg-one" {
+		t.Fatalf("wrong partial response: %+v", page)
+	}
+
+	page = request("?limit=1&cursor="+url.QueryEscape(*page.NextCursor), 200)
+	if !page.Partial || len(page.Items) != 1 || page.Items[0].MessageID != "pvmbg-two" {
+		t.Fatalf("wrong next partial page: %+v", page)
+	}
+
+	request("?cursor=invalid", 400)
+
+	for _, name := range []string{"a", "b"} {
+		failReads(c.Nodes[name].Store, "public.unprocessed_messages")
+	}
+
+	request("?source=BMKG", 503)
 }
 
 func TestDataIntegrationDualWriteWipeRefillAndNextLoss(t *testing.T) {

@@ -31,8 +31,10 @@ type ParkedMessage struct {
 }
 
 type ParkingPage struct {
-	Items      []ParkedMessage `json:"items"`
-	NextCursor *string         `json:"next_cursor"`
+	Items            []ParkedMessage `json:"items"`
+	NextCursor       *string         `json:"next_cursor"`
+	Partial          bool            `json:"partial,omitempty"`
+	UnavailableUnits []string        `json:"unavailable_units,omitempty"`
 }
 
 type Parking interface {
@@ -56,6 +58,8 @@ const parkingColumns = `message_id,source,received_at,source_ref_id,raw,raw_leng
 // Row limits alone allow 1000 four-MiB records to exhaust a 512-MiB pod.
 // A short page still has a cursor; replay callers can request another batch.
 const MaxParkingBatchBytes = 8 << 20
+
+var errInvalidParkingCursor = errors.New("invalid parking cursor")
 
 func scanParked(row pgx.Row) (ParkedMessage, error) {
 	var m ParkedMessage
@@ -122,7 +126,7 @@ func (s *Store) ListUnprocessed(ctx context.Context, source, cursor string, limi
 	if cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(cursor)
 		if err != nil || json.Unmarshal(raw, &after) != nil || after.ID == "" || after.Source != source {
-			return page, errors.New("invalid parking cursor")
+			return page, errInvalidParkingCursor
 		}
 	}
 
