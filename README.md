@@ -194,6 +194,24 @@ The two criterion 7 runs must use identical `VUS`, `DURATION`, and `THINK_TIME`,
 
 **P3. Unreadable source data.** Switch PVMBG to schema 3, 4, or 5. Payloads that break the contract, including oversized ones, are parked with their reason and full body, and Internal Ops can inspect and replay them. Field Team reports are accepted through `POST /field-reports`.
 
+Schema change policy. The Aggregator never guesses what a changed field means.
+
+| Change | Example | Behavior |
+|---|---|---|
+| New optional field | PVMBG schema 2 adds `confidence_level` | Accepted automatically. Unmapped fields are kept in `attributes`, and a known optional field is validated, such as `confidence_level` in 0 to 1. |
+| Field renamed | PVMBG schema 3, `ash_column_height_m` becomes `ash_height_m` | Rejected and parked as `schema_violation`, not retryable. Accepted only after `accept_ash_rename` is set. |
+| Type changed | PVMBG schema 4, `eruption_count_24h` becomes a string | Rejected and parked as `schema_violation`, not retryable. Accepted only after `accept_string_count` is set. |
+| Required field missing | PVMBG schema 5 drops `volcano_id` | Rejected and parked as `schema_violation`, not retryable. Accepted only for the reports listed in `volcano_by_report`. |
+| Broken body | Truncated JSON, nesting deeper than 32, invalid UTF-8, a body over 4 MiB | Parked whole with its SHA-256. Bad records are isolated, so the other records still go through. A body cut off by a network error is marked retryable, and every other broken body is permanent. |
+
+The opt-in decisions live in `deploy/k8s/base/policy.json`, which becomes the `source-schema-policy` ConfigMap. The default `{}` accepts nothing beyond new optional fields. The Aggregator reads the file on each poll, so after the ConfigMap is applied (the kubelet syncs it within about a minute) replay the parked messages:
+
+```sh
+# deploy/k8s/base/policy.json: {"accept_ash_rename": true, "accept_string_count": true}
+make deploy-demo DEPLOY_ARGS="..."
+curl -X POST -H 'Authorization: Bearer <internal-ops-token>' -d '{"source":"PVMBG","reason_code":"schema_violation"}' http://localhost:8080/internal-ops/replay
+```
+
 ```sh
 kubectl -n $ns exec deploy/pvmbg -- wget -qO- --post-data '{"version":4}' http://127.0.0.1:8082/admin/schema-version
 curl -H 'Authorization: Bearer <internal-ops-token>' http://localhost:8080/internal-ops/unprocessed

@@ -28,7 +28,8 @@ func (h Health) Degraded() bool {
 
 // Assess checks a page against the last position and returns the valid items without repeats,
 // and the position after them. Out-of-order items are still returned, since each is a real reading.
-// Stale means the newest reading lies more than staleAfter behind generated_at.
+// Stale means the newest reading, or the last accepted one when the page has none,
+// lies more than staleAfter behind generated_at.
 func Assess(page Page, last Position, staleAfter time.Duration) ([]Item, Position, Health) {
 	var (
 		health Health
@@ -65,7 +66,14 @@ func Assess(page Page, last Position, staleAfter time.Duration) ([]Item, Positio
 		accepted = append(accepted, item)
 	}
 
-	health.Stale = len(accepted) > 0 && page.GeneratedAt.Sub(newest) > staleAfter
+	// A silent sensor sends pages with no new reading. It is judged by the last reading
+	// it ever accepted, so a sensor that reports healthy while it stopped observing
+	// turns stale instead of looking fresh forever.
+	if len(accepted) == 0 {
+		newest = last.ObservedAt
+	}
+
+	health.Stale = !newest.IsZero() && page.GeneratedAt.Sub(newest) > staleAfter
 
 	return accepted, last, health
 }

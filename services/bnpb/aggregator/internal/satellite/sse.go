@@ -194,6 +194,11 @@ func decodeFeedDetection(object map[string]json.RawMessage, retract bool) (Detec
 		}
 	}
 
+	feedKey, err := rawFeedKey(object)
+	if err != nil {
+		return Detection{}, err
+	}
+
 	if raw := object["acq_time"]; len(raw) > 0 && raw[0] != '"' {
 		var n int
 		if json.Unmarshal(raw, &n) != nil || n < 0 || n > 2359 {
@@ -210,6 +215,8 @@ func decodeFeedDetection(object map[string]json.RawMessage, retract bool) (Detec
 		return Detection{}, errors.New("invalid detection types")
 	}
 
+	d.FeedKey = feedKey
+
 	d.Confidence = normalizeConfidence(d.Confidence)
 	if retract {
 		d.Confidence, d.FRP = "nominal", 0
@@ -220,6 +227,32 @@ func decodeFeedDetection(object map[string]json.RawMessage, retract bool) (Detec
 	}
 
 	return d, nil
+}
+
+// rawFeedKey joins the five identity fields as the feed wrote them: a string value
+// without its quotes, and a number exactly as its JSON literal.
+func rawFeedKey(object map[string]json.RawMessage) (string, error) {
+	parts := make([]string, 0, 5)
+
+	for _, field := range []string{"satellite", "acq_date", "acq_time", "latitude", "longitude"} {
+		raw := bytes.TrimSpace(object[field])
+		if len(raw) > 0 && raw[0] == '"' {
+			var value string
+			if json.Unmarshal(raw, &value) != nil {
+				return "", errors.New("invalid detection types")
+			}
+
+			raw = []byte(value)
+		}
+
+		if len(raw) == 0 || bytes.ContainsAny(raw, "|\n") {
+			return "", errors.New("invalid detection identity")
+		}
+
+		parts = append(parts, string(raw))
+	}
+
+	return strings.Join(parts, "|"), nil
 }
 
 func normalizeConfidence(value string) string {
