@@ -243,3 +243,59 @@ func TestIntegrationBMKGBoundaryAndSchemaParkingSurviveRestart(t *testing.T) {
 
 	t.Log("BMKG valid prefix committed; schema, UTF-8, depth and truncation parked durably once across restart")
 }
+
+func TestIntegrationNetworkCutBodyRecoversAfterCleanRefetch(t *testing.T) {
+	s := integrationStore(t)
+	ctx := context.Background()
+	good, _ := json.Marshal(fixture(t, "volcanic-v1.json")[0])
+	full := append(append([]byte("["), good...), ']')
+
+	var calls atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			// Promise more bytes than are sent, so the client sees the connection drop mid-body.
+			w.Header().Set("Content-Length", "100000")
+			_, _ = w.Write(append(append([]byte("["), good...), ','))
+			return
+		}
+
+		_, _ = w.Write(full)
+	}))
+	defer server.Close()
+
+	p := &Poller{Source: "PVMBG", BaseURL: server.URL, Store: &EpochIngest{Data: s, Source: "PVMBG", WriterEpoch: 1}, Client: server.Client(), Timeout: time.Second, Log: testLog()}
+	decode := func(m ParkedMessage) (HazardEvent, error) { return p.DecodeParked(ctx, m) }
+
+	if err := p.Poll(ctx, "cut-test"); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := s.ListUnprocessed(ctx, "PVMBG", "", 100)
+	if err != nil || len(page.Items) != 1 || !page.Items[0].Retryable || page.Items[0].Status != parkingRetrying {
+		t.Fatal("network cut not parked as retrying", page, err)
+	}
+
+	// Before any clean read the prefix cannot recover on its own.
+	if n, err := s.ReplayReason(ctx, "PVMBG", 1, 100, "", decode); err != nil || n != 0 {
+		t.Fatal("cut body recovered without a refetch", n, err)
+	}
+
+	if err = p.Poll(ctx, "cut-test-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := s.ReplayReason(ctx, "PVMBG", 1, 100, "", decode); err != nil || n != 1 {
+		t.Fatal("clean refetch did not recover the cut body", n, err)
+	}
+
+	page, err = s.ListUnprocessed(ctx, "PVMBG", "", 100)
+	if err != nil || len(page.Items) != 0 {
+		t.Fatal("recovered cut body still listed", page, err)
+	}
+
+	hazards, err := s.Read(ctx, Query{Source: "PVMBG", Limit: 100})
+	if err != nil || len(hazards.Data) != 1 || hazards.Data[0].Revision != 1 {
+		t.Fatal("refetch lost or duplicated the record", hazards, err)
+	}
+}

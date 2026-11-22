@@ -351,6 +351,12 @@ func replayInTx(ctx context.Context, tx pgx.Tx, source string, m ParkedMessage, 
 		err = errors.New("truncated input requires refetch")
 	}
 
+	if errors.Is(err, ErrRefetched) {
+		_, err = tx.Exec(ctx, `UPDATE unprocessed_messages SET status='recovered',attempts=attempts+1,next_attempt_at=NULL WHERE message_id=$1`, m.MessageID)
+
+		return err == nil, err
+	}
+
 	if err != nil {
 		attempts := m.Attempts + 1
 		status, next := nextParkingStatus(m.Retryable, true, attempts, time.Now().UTC())
@@ -453,6 +459,10 @@ func RunParkingRetries(ctx context.Context, p Parking, source string, epoch int6
 }
 
 // nextParkingStatus decides where a message goes after attempt number attempts, counting the first park as 0.
+// ErrRefetched tells replay that a parked body was superseded by a later clean poll of
+// the same path. The message is recovered without writing an event of its own.
+var ErrRefetched = errors.New("body refetched by a later clean poll")
+
 func nextParkingStatus(retryable, failed bool, attempts int, now time.Time) (string, *time.Time) {
 	if !failed {
 		return parkingRecovered, nil
