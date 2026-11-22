@@ -177,15 +177,18 @@ curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audi
 # Criterion 6: 10,000 VUs while the Aggregator goes from 3 to 5 to 2 instances
 k6 run -e SCENARIO=sustained -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
 loadtest/scale.sh scale
-# Criterion 7: run once with 1 Aggregator and once with 3, then compare the throughput lines
-kubectl -n $ns scale deployment/aggregator --replicas=1
-k6 run -e SCENARIO=throughput -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js
+# Criterion 7: the same run with 1 Aggregator and with 3, then compare the throughput lines
+for replicas in 1 3; do
+  kubectl -n $ns scale deployment/aggregator --replicas=$replicas
+  kubectl -n $ns rollout status deployment/aggregator
+  k6 run -e SCENARIO=throughput -e VUS=500 -e DURATION=150s -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js
+done
 # Criterion 8: a version swap under a steady 200 req/s fails k6 if any request fails
 k6 run -e SCENARIO=rollout -e DURATION=300s -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
 loadtest/scale.sh rollout <new-tag>
 ```
 
-Criterion 8 allows no failed request, so the `rollout` scenario counts a 429 as a failure too. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request k6 could not send. `STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
+The two criterion 7 runs must use identical `VUS`, `DURATION`, and `THINK_TIME`, from the same k6 machine, so the 2.0× comparison is valid. Criterion 8 allows no failed request, so the `rollout` scenario counts a 429 as a failure too. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request k6 could not send. `STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
 
 **P3. Unreadable source data.** Switch PVMBG to schema 3, 4, or 5. Payloads that break the contract, including oversized ones, are parked with their reason and full body, and Internal Ops can inspect and replay them. Field Team reports are accepted through `POST /field-reports`.
 
@@ -211,8 +214,13 @@ k6 run -e SCENARIO=overload -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_
 
 The alert path has two objectives: no critical event lost, and 99% of critical events delivered within 5 s. `scripts/error-budget.py` takes the expected critical events from Sensor Pantai itself, so an event lost before Atlas stored it still counts. It matches them with the notifier log and reports how much of each budget a window used. Critical observations that break the base contract are parked by design and reported on their own line. The latency objective uses the notifier's latency from Atlas ingestion, and the report adds the time from `observed_at` to delivery.
 
+`kubectl logs` reads only the current notifier pod, so deliveries logged by a pod that restarted or moved would look lost. Start `scripts/notifier-log.sh` before the game day. It keeps appending the log to a file across restarts. Stop it afterwards and feed the file to the script.
+
 ```sh
-kubectl -n $ns logs deploy/notifier --since=2h | python scripts/error-budget.py --sensor http://localhost:18080 --since 2026-11-22T10:00:00Z
+scripts/notifier-log.sh notifier.log &
+# ... game day ...
+kill %1
+python scripts/error-budget.py --sensor http://localhost:18080 --since 2026-11-22T10:00:00Z < notifier.log
 ```
 
 ## Source mocks

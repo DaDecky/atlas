@@ -11,7 +11,8 @@ is parked by design (P5 criterion 2). It is reported separately and not counted 
 The latency objective uses the notifier's latency_ms, measured from Atlas ingestion. The report also
 prints the time from observed_at to delivery, which includes the sensor's own publication delay.
 
-Usage: kubectl logs deploy/notifier | python scripts/error-budget.py --sensor URL --since 2026-11-20T10:00:00Z
+Usage: python scripts/error-budget.py --sensor URL --since 2026-11-20T10:00:00Z < notifier.log
+Collect notifier.log with scripts/notifier-log.sh, which survives notifier restarts.
 The Sensor Pantai token is read from PANTAI_AUTH_TOKEN.
 """
 
@@ -123,7 +124,15 @@ def critical_events(sensor: str, token: str, since: str) -> tuple[dict[str, tupl
             ref = item.get("observation_id")
 
             if reason:
-                parked.add(repr(ref))
+                try:
+                    before = parse_time(item["observed_at"]) < start
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    before = False
+
+                # An item without a usable id or time is still distinct, so the whole item is the key.
+                if not before:
+                    parked.add(json.dumps(item, sort_keys=True))
+
                 continue
 
             observed = parse_time(item["observed_at"])
