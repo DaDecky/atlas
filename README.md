@@ -18,7 +18,7 @@ M2 runs every BNPB component on Kubernetes in the namespace `sistem-informasi-ke
 
 ### 1.1 Topology
 
-The demo cluster has three k3s nodes with separate kernels. The node names are part of the deployment, because the overlay pins services to `atlas-node-a` and the data placement map is computed from the three names.
+The demo cluster has three k3s nodes with separate kernels. The node names are part of the deployment, because the overlay pins most services (all except the Aggregator and Client API) to `atlas-node-a` and the data placement map is computed from the three names.
 
 | Node | Kind | k3s role | VM size | Physical host | Host CPU and RAM |
 |---|---|---|---|---|---|
@@ -32,7 +32,8 @@ All three nodes run on one physical host, so they share its CPU, memory, and dis
 |---|---|---|
 | Aggregator | 3 | One per node, by anti-affinity and a topology spread constraint |
 | Canonical Store (`canonical-store`) | 3 | One per node, data on the node's local disk |
-| Auth and Client API | 2 each | `atlas-node-a` |
+| Auth | 2 | `atlas-node-a` |
+| Client API | 2 | Any node, placed by the scheduler (not pinned since PR #41) |
 | BMKG, PVMBG, their databases, Auth database, RabbitMQ, consumers, notifier | 1 each | `atlas-node-a` |
 | Sensor Pantai | 1 | Scheduler's choice, vendor manifest unmodified |
 | VictoriaMetrics and Jaeger | 1 each | `atlas-node-a`, only with telemetry enabled |
