@@ -56,9 +56,12 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 	}
 
 	health := &Health{}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
+	mux.Handle("/", health.Handler())
 	server := &http.Server{
 		Addr:              cfg.HealthAddr,
-		Handler:           health.Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: cfg.HTTPReadHeaderTimeout,
 		ReadTimeout:       cfg.HTTPReadTimeout,
 		WriteTimeout:      cfg.HTTPWriteTimeout,
@@ -72,6 +75,10 @@ func Run(ctx context.Context, cfg Config, log *slog.Logger) error {
 
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
+
+	if cfg.MetricsPushURL != "" {
+		go metrics.push(runCtx, cfg.MetricsPushURL, 5*time.Second, log)
+	}
 
 	serverDone := make(chan error, 1)
 
@@ -120,7 +127,12 @@ func consumeOnce(ctx context.Context, cfg Config, state *ProcessedState, health 
 	defer conn.Close()
 
 	health.ready.Store(true)
-	defer health.ready.Store(false)
+	metrics.brokerConnected.Store(true)
+
+	defer func() {
+		health.ready.Store(false)
+		metrics.brokerConnected.Store(false)
+	}()
 
 	for {
 		select {
@@ -191,6 +203,7 @@ func handle(state *ProcessedState, delivery amqp.Delivery, received time.Time, l
 			"revision", message.Revision,
 			"reason", "invalid_message",
 		)
+		metrics.rejected.Add(1)
 
 		return delivery.Nack(false, false)
 	}
@@ -202,6 +215,8 @@ func handle(state *ProcessedState, delivery amqp.Delivery, received time.Time, l
 
 	if !delivered {
 		log.Info("duplicate_alert", "hazard_id", message.HazardID, "revision", message.Revision, "correlation_id", delivery.CorrelationId)
+		metrics.duplicate.Add(1)
+
 		return delivery.Ack(false)
 	}
 
@@ -213,6 +228,7 @@ func handle(state *ProcessedState, delivery amqp.Delivery, received time.Time, l
 		"correlation_id", delivery.CorrelationId,
 		"latency_ms", received.Sub(message.IngestedAt).Milliseconds(),
 	)
+	metrics.delivery(received.Sub(message.IngestedAt))
 
 	return delivery.Ack(false)
 }

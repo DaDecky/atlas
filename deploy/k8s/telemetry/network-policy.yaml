@@ -13,7 +13,7 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: [aggregator, auth, client-api]
+                values: [aggregator, auth, client-api, notifier]
       ports:
         - protocol: TCP
           port: 8428
