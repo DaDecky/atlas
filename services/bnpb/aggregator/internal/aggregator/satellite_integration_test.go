@@ -55,6 +55,7 @@ func TestIntegrationSatelliteAuditConfidence(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	legacy := contractEvent("SATELIT", "legacy", now)
+
 	legacy.Attributes["highest_confidence"] = json.RawMessage(`"nominal"`)
 	if _, err := store.Upsert(ctx, WriteBatch{Source: "SATELIT", Epoch: 1, Events: []HazardEvent{legacy}, Now: now}); err != nil {
 		t.Fatal(err)
@@ -79,6 +80,7 @@ func TestIntegrationSatelliteAuditConfidence(t *testing.T) {
 
 	audit := (&AuditAPI{Store: store, Token: "audit"}).Handler()
 	response := request(audit, "/internal/audit/events?source=SATELIT", "audit")
+
 	var page struct {
 		Items []HazardEvent `json:"items"`
 	}
@@ -91,6 +93,7 @@ func TestIntegrationSatelliteAuditConfidence(t *testing.T) {
 		if string(event.Attributes["max_confidence"]) != wanted[event.SourceRefID] || event.Attributes["highest_confidence"] != nil {
 			t.Fatal("incorrect Audit confidence", event.SourceRefID, event.Attributes)
 		}
+
 		delete(wanted, event.SourceRefID)
 	}
 }
