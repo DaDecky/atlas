@@ -1,8 +1,243 @@
 # Atlas
 
-Disaster coordination services for BMKG, PVMBG, and BNPB. Compose runs each component in its own container for development, and M2 runs on k3s as described in [Run on k3s (M2)](#run-on-k3s-m2). Auth owns its session database, the Aggregator owns the canonical store, and clients retrieve hazard data through the Client API.
+Atlas is a disaster coordination platform for BMKG, PVMBG, and BNPB. The Aggregator reads four hazard sources, which are BMKG earthquakes, PVMBG volcanoes, a satellite fire feed, and the Sensor Pantai coastal sensor. It stores the events in a sharded and replicated store and serves them to the Media, Field Team, and BNPB Internal Ops clients through the Client API. Milestone 2 (M2) runs the system on a three-node k3s cluster. The Milestone 1 (M1) stack runs on Docker Compose for local development.
 
-## Run
+The table below tells which part of this file to follow.
+
+| Goal | Go to |
+|---|---|
+| Run the M2 system on k3s | [1. Milestone 2 on k3s](#1-milestone-2-on-k3s) |
+| Demonstrate an M2 problem | [2. Demo guide for M2](#2-demo-guide-for-m2) |
+| Develop locally on Docker Compose | [3. Milestone 1 on Compose](#3-milestone-1-on-compose) |
+| Run the tests | [4. Checks](#4-checks) |
+| Look up an API, a queue rule, or a network | [5. Reference](#5-reference) |
+
+## 1. Milestone 2 on k3s
+
+M2 runs every BNPB component on Kubernetes in the namespace `sistem-informasi-kebencanaan-bnpb`. The steps below start from an empty cluster and end with a running system.
+
+### 1.1 Topology
+
+The demo cluster has three k3s nodes with separate kernels. The node names are part of the deployment, because the overlay pins services to `atlas-node-a` and the data placement map is computed from the three names.
+
+| Node | Kind | k3s role | VM size | Physical host | Host CPU and RAM |
+|---|---|---|---|---|---|
+| `atlas-node-a` | VM (Proxmox VM 103) | control plane and worker | 4 vCPU, 8 GiB RAM, 30 GiB disk | `adhaprox`, Adha's Proxmox VE 9.1 machine | Intel Core i5-8500T, 6 cores and 6 threads, 16 GB RAM |
+| `atlas-node-b` | VM (Proxmox VM 104) | worker | 2 vCPU, 2 GiB RAM, 20 GiB disk | `adhaprox` | same host |
+| `atlas-node-c` | VM (Proxmox VM 105) | worker | 2 vCPU, 2 GiB RAM, 20 GiB disk | `adhaprox` | same host |
+
+All three nodes run on one physical host, so they share its CPU, memory, and disk. The host reports 15.5 GiB of usable memory. The node IPs are `10.0.0.40` to `10.0.0.42`, and pods use the k3s default `10.42.0.0/16`. The store NetworkPolicies in `deploy/k8s/overlays/demo/kustomization.yaml` allow these addresses, so a cluster with other IPs must update them there. The table below lists where the demo overlay places each workload.
+
+| Component | Replicas | Placement |
+|---|---|---|
+| Aggregator | 3 | One per node, by anti-affinity and a topology spread constraint |
+| Canonical Store (`canonical-store`) | 3 | One per node, data on the node's local disk |
+| Auth and Client API | 2 each | `atlas-node-a` |
+| BMKG, PVMBG, their databases, Auth database, RabbitMQ, consumers, notifier | 1 each | `atlas-node-a` |
+| Sensor Pantai | 1 | Scheduler's choice, vendor manifest unmodified |
+| VictoriaMetrics and Jaeger | 1 each | `atlas-node-a`, only with telemetry enabled |
+| Tester Agent | 1 per node | DaemonSet in the namespace `tester-agent` |
+
+### 1.2 Create the cluster
+
+Start from three Linux VMs with the IPs above. Install the k3s server on the first node, then join the other two as agents with the token from the server. `K3S_NODE_NAME` sets the node names that the overlay expects.
+
+```sh
+# on atlas-node-a
+curl -sfL https://get.k3s.io | K3S_NODE_NAME=atlas-node-a sh -
+sudo cat /var/lib/rancher/k3s/server/node-token
+# on atlas-node-b, then atlas-node-c with its own name
+curl -sfL https://get.k3s.io | K3S_URL=https://10.0.0.40:6443 K3S_TOKEN=<node-token> K3S_NODE_NAME=atlas-node-b sh -
+```
+
+Copy `/etc/rancher/k3s/k3s.yaml` from `atlas-node-a` to the operator machine and replace `127.0.0.1` in it with `10.0.0.40`. Then check that `kubectl get nodes` lists the three nodes as `Ready`.
+
+### 1.3 Deploy
+
+The operator machine needs `kubectl` with a context for the cluster, Docker, Go 1.27.4, and Python 3 with the `cryptography` package. Each node needs an SSH alias that can run `sudo k3s ctr`, so the script can import the locally built images. One command builds the images, imports them on each node, applies the `demo` overlay with lease-managed ingestion and telemetry, and waits until every workload is ready.
+
+```sh
+make deploy-demo DEPLOY_ARGS="--context <context> --load-vms <ssh-node-a> <ssh-node-b> <ssh-node-c>"
+```
+
+The first run creates the ignored file `.env.m2` with fresh credentials, and later runs reuse it. Before the exam, replace `AUDIT_TOKEN`, `PANTAI_AUTH_TOKEN`, and `SATELLITE_TOKEN` in `.env.m2` with the values that the assistants give, then run the command again. Credentials become Secrets and settings become ConfigMaps, and no secret appears in a manifest or in the command output. The Tester Agent is installed from the assistants' manifest, unmodified.
+
+```sh
+kubectl apply -f https://raw.githubusercontent.com/susTuna/if4031-tester-agent/ebb55261711123a9a211739ffbf140a275caa6da/manifest.yaml
+```
+
+Every service is a ClusterIP Service, so the demo reaches them through port forwards. Open the forwards once and load the credentials into the shell. The demo guide in section 2 assumes both.
+
+```sh
+set -a; source .env.m2; set +a
+ns=sistem-informasi-kebencanaan-bnpb
+kubectl -n $ns port-forward svc/client-api 8080:8080 &
+kubectl -n $ns port-forward svc/auth 8084:8084 &
+kubectl -n $ns port-forward svc/aggregator 8083:8083 &        # Audit API
+kubectl -n $ns port-forward svc/sensor-pantai 18080:8080 &
+kubectl -n $ns port-forward svc/victoriametrics 8428:8428 &   # dashboard at /vmui
+kubectl -n $ns port-forward svc/jaeger 16686:16686 &          # traces
+```
+
+A healthy deployment shows every pod as `Running` and the Client API answering.
+
+```sh
+kubectl -n $ns get pods -o wide
+curl http://localhost:8080/health
+```
+
+### 1.4 Configuration
+
+`.env.m2` uses the variables of `.env`, described in [3.2 Configuration](#32-configuration), plus the ones below. Optional values are read only when set, and `.env.example` lists each default.
+
+<details>
+<summary>M2 variables</summary>
+
+| Variable | Used by | Meaning | Default |
+|---|---|---|---|
+| `AUDIT_TOKEN` | Aggregator | Bearer token of the Audit API. | secret |
+| `PANTAI_AUTH_TOKEN` | Sensor Pantai, Aggregator | Shared Sensor Pantai token. | secret |
+| `SATELLITE_TOKEN` | Aggregator | Group token for the satellite feed. Without it the satellite adapter stays off. | unset |
+| `SOURCE_LEASE_DURATION`, `SOURCE_LEASE_RENEW_DEADLINE`, `SOURCE_LEASE_RETRY_PERIOD` | Aggregator | Ingestion lease timing. A leader that misses the renew deadline stops writing. | `15s`, `10s`, `2s` |
+| `SENSOR_POLL_INTERVAL`, `SENSOR_TIMEOUT`, `SENSOR_STALE_AFTER` | Aggregator | Sensor Pantai polling, request timeout, and the age after which its data is stale. | `1s`, `2s`, `5m` |
+| `SHARD_DEADLINE`, `READ_HEDGE_DELAY`, `SHARD_READ_WORKERS` | Aggregator | Per-copy read deadline, delay before a hedged read to the second copy, and parallel shard reads. | `400ms`, `150ms`, `8` |
+| `REFILL_VERIFY_ATTEMPTS` | Aggregator | Verification attempts per refilled copy. | `5` |
+| `DATA_INGEST_POOL_SIZE`, `DATA_QUERY_POOL_SIZE` | Aggregator | Connection pools per Canonical Store node. | `4`, `8` |
+| `HAZARD_READ_CACHE_TTL` | Aggregator | First-page read cache. `0s` turns it off. | `1s` |
+| `AUDIT_TIMEOUT`, `OPS_CAPACITY` | Aggregator | Audit API request deadline and concurrent Internal Ops requests. | `10s`, `2` |
+
+</details>
+
+## 2. Demo guide for M2
+
+Each problem below has four parts. The goal says what to show, the steps give the commands, the expectation says what the audience should see, and the check names the automated test when one exists. Run section 1.3 first, so the port forwards and the credentials are ready.
+
+The Tester Agent injects failures such as node loss, clock skew, network delay, and mock outages. List its practice scenarios and run one at any time. A VM freeze is done by hand on its host.
+
+```sh
+kubectl exec -n tester-agent daemonset/tester-agent -- /app list
+kubectl exec -n tester-agent daemonset/tester-agent -- /app run practice <name>
+kubectl logs -n tester-agent daemonset/tester-agent
+```
+
+### M2 P1. Distributed storage
+
+**Goal.** Show that events spread over the nodes, that every event has two copies, and that losing or wiping a node loses nothing.
+
+**Steps.** Look up where one event lives and read the checksum of all shards. Run a practice scenario that kills a worker and wipes its data, then read the checksum again. The page at `http://localhost:8083/internal/analytics` counts events by type, severity, and area.
+
+```sh
+curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/audit/location?hazard_id=<hazard-id>'
+curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/checksum
+```
+
+**Expect.** The location lists two copies on two different nodes. The checksum is the same before and after recovery, and requests during recovery answer complete or marked `partial`, never with a 500.
+
+**Check.** `make data-integration` runs the wipe, refill, and node join tests on a local database.
+
+### M2 P2. Leadership and scaling
+
+**Goal.** Show one active poller per source, a stale leader that cannot write, scaling from 3 to 5 to 2 instances without errors, and a rollout without a failed request.
+
+**Steps.** Delete the pod that holds a source lease, or skew a node clock with the Tester Agent, and watch the lease move in the Aggregator logs and in the `Active source lease holder` panel. For the load criteria, run k6 together with `loadtest/scale.sh`.
+
+```sh
+# Criterion 6: 10,000 VUs while the Aggregator goes from 3 to 5 to 2 instances
+k6 run -e SCENARIO=sustained -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
+loadtest/scale.sh scale
+# Criterion 7: the same run with 1 Aggregator and with 3, then compare the throughput lines
+for replicas in 1 3; do
+  kubectl -n $ns scale deployment/aggregator --replicas=$replicas
+  kubectl -n $ns rollout status deployment/aggregator
+  k6 run -e SCENARIO=throughput -e VUS=500 -e DURATION=150s -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js
+done
+# Criterion 8: a version swap under a steady 200 req/s fails k6 if any request fails
+k6 run -e SCENARIO=rollout -e DURATION=300s -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
+loadtest/scale.sh rollout <new-tag>
+```
+
+**Expect.** Another pod takes over the lease and no source is polled twice. The k6 summary reports throughput from complete HTTP 200 responses only, and it counts partial 200s, 429s, and failed requests separately. The two criterion 7 runs must use identical `VUS`, `DURATION`, and `THINK_TIME` from the same machine, so the 2.0x comparison is valid.
+
+A port forward is a single tunnel and caps throughput, so start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`. The `rollout` scenario counts a 429 as a failure, because criterion 8 allows no failed request. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request that k6 could not send. `STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
+
+### M2 P3. Unreadable source data
+
+**Goal.** Show that a changed or broken source payload is parked with its reason and full body, that Internal Ops can inspect and replay it, and that Field Team reports are never lost after a 202.
+
+**Steps.** Switch PVMBG to schema 3, 4, or 5, then list the parked messages through Internal Ops and the Audit API. Field Team sends reports with `POST /field-reports`.
+
+```sh
+kubectl -n $ns exec deploy/pvmbg -- wget -qO- --post-data '{"version":4}' http://127.0.0.1:8082/admin/schema-version
+curl -H 'Authorization: Bearer <internal-ops-token>' http://localhost:8080/internal-ops/unprocessed
+curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/unprocessed
+```
+
+**Expect.** The Aggregator never guesses what a changed field means. The table below states the policy that the demo follows.
+
+| Change | Example | Behavior |
+|---|---|---|
+| New optional field | PVMBG schema 2 adds `confidence_level` | Accepted automatically. Unmapped fields stay in `attributes`, and a known optional field is validated, such as `confidence_level` in 0 to 1. |
+| Field renamed | Schema 3, `ash_column_height_m` becomes `ash_height_m` | Parked as `schema_violation`, not retryable. Accepted only after `accept_ash_rename` is set. |
+| Type changed | Schema 4, `eruption_count_24h` becomes a string | Parked as `schema_violation`, not retryable. Accepted only after `accept_string_count` is set. |
+| Required field missing | Schema 5 drops `volcano_id` | Parked as `schema_violation`, not retryable. Accepted only for the reports listed in `volcano_by_report`. |
+| Broken body | Truncated JSON, nesting deeper than 32, invalid UTF-8, a body over 4 MiB | Parked whole with its SHA-256. Bad records are isolated, so the other records still go through. A body cut off by a network error is retryable, and every other broken body is permanent. |
+
+The opt-in decisions live in `deploy/k8s/base/policy.json`, which becomes the `source-schema-policy` ConfigMap. The default `{}` accepts nothing beyond new optional fields. The Aggregator reads the file on each poll. After the ConfigMap is applied, the kubelet syncs it within about a minute, and then the parked messages are replayed.
+
+```sh
+# deploy/k8s/base/policy.json: {"accept_ash_rename": true, "accept_string_count": true}
+make deploy-demo DEPLOY_ARGS="..."
+curl -X POST -H 'Authorization: Bearer <internal-ops-token>' -d '{"source":"PVMBG","reason_code":"schema_violation"}' http://localhost:8080/internal-ops/replay
+```
+
+### M2 P4. Satellite feed
+
+**Goal.** Show that the Aggregator turns the satellite hotspots into one event per fire and matches the reference result.
+
+**Steps.** Set `SATELLITE_TOKEN` so the Aggregator reads the feed, export the stored `SATELIT` events from the Audit API, and compare them with the reference file.
+
+```sh
+curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/audit/events?source=SATELIT&limit=1000' > satellite.json
+python scripts/satellite-reference-diff.py --actual satellite.json --reference <reference.json>
+```
+
+**Expect.** Each fire appears once. The diff lists the remaining differences so that each one can be explained.
+
+### M2 P5. Sensor Pantai and the alert path
+
+**Goal.** Show that a sick sensor does not disturb the other sources, that Media is refused first under overload, and that no critical event is lost.
+
+**Steps.** Run the Sensor Pantai practice scenarios through the Tester Agent. The overload scenario floods the Client API as Media while Field Team keeps reading.
+
+```sh
+k6 run -e SCENARIO=overload -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET \
+  -e FIELD_TEAM_CLIENT_ID=$FIELD_TEAM_CLIENT_ID -e FIELD_TEAM_CLIENT_SECRET=$FIELD_TEAM_CLIENT_SECRET loadtest/m2.js
+```
+
+**Expect.** Only Media requests are rejected, and Field Team requests keep succeeding. For the game day, start the notifier log capture first, because `kubectl logs` reads only the current pod and a restarted pod would make deliveries look lost. Stop the capture afterwards and feed the file to the error budget script.
+
+```sh
+scripts/notifier-log.sh notifier.log &
+# ... game day ...
+kill %1
+python scripts/error-budget.py --sensor http://localhost:18080 --since 2026-11-22T10:00:00Z < notifier.log
+```
+
+The alert path has two objectives, no critical event lost and 99% of critical events delivered within 5 s. The script takes the expected critical events from Sensor Pantai itself, so an event lost before Atlas stored it still counts. It matches them with the notifier log and reports how much of each budget the window used. Critical observations that break the base contract are parked by design and reported on their own line. The latency objective uses the notifier's latency from Atlas ingestion, and the report adds the time from `observed_at` to delivery.
+
+### Observability
+
+With telemetry enabled, the Aggregator, Auth, and Client API export traces to Jaeger and metrics to VictoriaMetrics over OTLP, with 10% trace sampling. The `Atlas observability` dashboard at `http://localhost:8428/vmui` shows request rate, 5xx rate, and p95 latency per service. It also shows satellite lag, capacity rejections by client class, broker messages ready per queue, field report publish-to-ack latency, outbox backlog, copy refills, source polls, the active lease holder and writer epoch, stale writer rejections, and the Sensor Pantai circuit breaker. Traces are at `http://localhost:16686`. BMKG, PVMBG, the consumers, and the notifier have no exporter. Their queues are measured from the Aggregator through the broker, and their JSON logs carry the correlation ID like every other service.
+
+```sh
+kubectl -n $ns logs deploy/aggregator -f | grep <correlation-id>
+```
+
+## 3. Milestone 1 on Compose
+
+The M1 stack runs every component in its own container on Docker Compose. Auth owns its session database, the Aggregator owns the canonical store, and clients retrieve hazard data through the Client API. It remains the local development stack and the target of `make demo`.
+
+### 3.1 Run
 
 Install Docker with Compose, Go 1.27.4, GNU Make, Bash, and OpenSSL. On Windows, use WSL or Git Bash. Create `.env` with fresh secrets and a new Ed25519 signing pair.
 
@@ -10,9 +245,7 @@ Install Docker with Compose, Go 1.27.4, GNU Make, Bash, and OpenSSL. On Windows,
 make env
 ```
 
-`make env` overwrites `.env` every run. If the stack ran before, reset its databases with `docker compose down -v` so they accept the new passwords.
-
-Start all services in the foreground with `make dev`, or in the background with `make start`. Then check that they answer.
+`make env` overwrites `.env` every run. If the stack ran before, reset its databases with `docker compose down -v` so they accept the new passwords. Start all services in the foreground with `make dev`, or in the background with `make start`, and check that they answer.
 
 ```sh
 make start
@@ -22,17 +255,18 @@ make logs
 make stop      # keeps the database, broker, and consumer state volumes
 ```
 
-The source mocks listen on `8081` and `8082`, the Client API on `8080`, and Auth on `8084`. All host ports bind to `127.0.0.1`. The Aggregator API is reachable only from the Compose network. Never commit `.env`.
-
-Most examples below read credentials from `.env`. Load it into the shell once.
+The source mocks listen on `8081` and `8082`, the Client API on `8080`, and Auth on `8084`. All host ports bind to `127.0.0.1`, and the Aggregator API is reachable only from the Compose network. Never commit `.env`. Most examples below read credentials from `.env`, so load it into the shell once.
 
 ```sh
 set -a; source .env; set +a
 ```
 
-## Configuration
+### 3.2 Configuration
 
 `.env` holds two kinds of variables. Secrets are required, and `make env` generates them. Config is optional, and each value below is the default.
+
+<details>
+<summary>Variables of `.env`</summary>
 
 | Variable | Used by | Meaning | Default |
 |---|---|---|---|
@@ -57,250 +291,18 @@ set -a; source .env; set +a
 | `POLL_INTERVAL` | Aggregator | Time between polls of each source. | `3s` |
 | `ACCESS_TOKEN_TTL` | Auth | Access token lifetime. | `60s` |
 
-Other limits are optional environment variables. Each service's `config.go` holds the name, the default, and the range of each, and Compose passes the value from `.env` when it is set.
+</details>
 
-## Run on k3s (M2)
+Other limits are optional environment variables. Each service's `config.go` holds the name, the default, and the range, and Compose passes the value from `.env` when it is set.
 
-M2 runs every BNPB component on Kubernetes in the namespace `sistem-informasi-kebencanaan-bnpb`. Compose remains the local development stack. The commands below start from an empty cluster.
+### 3.3 Demo guide for M1
 
-### Topology
+Each M1 problem lists the manual steps for a live demo, then the automated check. `make demo P=Px` runs only the checks of that problem on a fresh stack.
 
-The demo cluster has three k3s nodes with separate kernels. The node names are part of the deployment: the overlay pins services to `atlas-node-a`, and the data placement map is computed from the three names.
+<details>
+<summary>M1 demo steps, P1 to P5</summary>
 
-| Node | Kind | k3s role | VM size | Physical host | Host CPU / RAM |
-|---|---|---|---|---|---|
-| `atlas-node-a` | VM (Proxmox VM 103) | control plane and worker | 4 vCPU, 8 GiB RAM, 30 GiB disk | `adhaprox`, Adha's Proxmox VE 9.1 machine | Intel Core i5-8500T, 6 cores / 6 threads, 16 GB RAM |
-| `atlas-node-b` | VM (Proxmox VM 104) | worker | 2 vCPU, 2 GiB RAM, 20 GiB disk | `adhaprox` | same host |
-| `atlas-node-c` | VM (Proxmox VM 105) | worker | 2 vCPU, 2 GiB RAM, 20 GiB disk | `adhaprox` | same host |
-
-All three nodes run on one physical host, so each has its own kernel but they share the host's CPU, memory, and disk. The host reports 15.5 GiB of usable memory.
-
-The node IPs are `10.0.0.40` to `10.0.0.42`, and pods use the k3s default `10.42.0.0/16`. The demo overlay's store NetworkPolicies allow these addresses, so a cluster with other node IPs must update them in `deploy/k8s/overlays/demo/kustomization.yaml`. The demo overlay places the workloads as follows.
-
-| Component | Replicas | Placement |
-|---|---|---|
-| Aggregator | 3 | Spread one per node by anti-affinity and a topology spread constraint |
-| Canonical Store (`canonical-store`) | 3 | One per node, required by anti-affinity, data on the node's local disk |
-| Auth, Client API | 2 each | `atlas-node-a` |
-| BMKG, PVMBG, their databases, Auth database, RabbitMQ, consumers, notifier | 1 each | `atlas-node-a` |
-| Sensor Pantai | 1 | Scheduler's choice, vendor manifest unmodified |
-| VictoriaMetrics, Jaeger | 1 each | `atlas-node-a`, only with telemetry enabled |
-| Tester Agent | 1 per node | DaemonSet in its own namespace `tester-agent` |
-
-### Create the cluster
-
-Start from three Linux VMs with the IPs above. Install the k3s server on the first node, then join the other two as agents with the token from the server. `K3S_NODE_NAME` sets the node names the overlay expects.
-
-```sh
-# on atlas-node-a
-curl -sfL https://get.k3s.io | K3S_NODE_NAME=atlas-node-a sh -
-sudo cat /var/lib/rancher/k3s/server/node-token
-# on atlas-node-b, then atlas-node-c with its own name
-curl -sfL https://get.k3s.io | K3S_URL=https://10.0.0.40:6443 K3S_TOKEN=<node-token> K3S_NODE_NAME=atlas-node-b sh -
-```
-
-Copy `/etc/rancher/k3s/k3s.yaml` from `atlas-node-a` to your machine, replace `127.0.0.1` in it with `10.0.0.40`, and check that `kubectl get nodes` lists the three nodes as `Ready`.
-
-### Deploy
-
-Install `kubectl` with a context for the cluster, Docker, Go 1.27.4, and Python 3 with the `cryptography` package. Each node needs an SSH alias that can run `sudo k3s ctr`, so the script can import the locally built images.
-
-Deploy the whole system with one command. It builds the images, imports them on each node, applies the `demo` overlay with lease-managed ingestion and telemetry, and waits until every workload is ready.
-
-```sh
-make deploy-demo DEPLOY_ARGS="--context <context> --load-vms <ssh-node-a> <ssh-node-b> <ssh-node-c>"
-```
-
-`make deploy-demo` is shorthand for `python scripts/deploy-k8s.py --build --overlay demo --enable-ingestion --enable-telemetry` followed by `DEPLOY_ARGS`. The first run creates the ignored file `.env.m2` with fresh credentials, and later runs reuse it. Before the exam, replace `AUDIT_TOKEN`, `PANTAI_AUTH_TOKEN`, and `SATELLITE_TOKEN` in `.env.m2` with the values the assistants give, then run the command again. Credentials become Secrets and settings become ConfigMaps, and no secret appears in a manifest or in the command output.
-
-Install the Tester Agent with the assistants' manifest, unmodified.
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/susTuna/if4031-tester-agent/ebb55261711123a9a211739ffbf140a275caa6da/manifest.yaml
-```
-
-Every service is a ClusterIP Service, so reach them with port forwards. The rest of this section assumes these forwards and `set -a; source .env.m2; set +a`.
-
-```sh
-ns=sistem-informasi-kebencanaan-bnpb
-kubectl -n $ns port-forward svc/client-api 8080:8080 &
-kubectl -n $ns port-forward svc/auth 8084:8084 &
-kubectl -n $ns port-forward svc/aggregator 8083:8083 &        # Audit API
-kubectl -n $ns port-forward svc/sensor-pantai 18080:8080 &
-kubectl -n $ns port-forward svc/victoriametrics 8428:8428 &   # dashboard at /vmui
-kubectl -n $ns port-forward svc/jaeger 16686:16686 &          # traces
-```
-
-### M2 configuration
-
-`.env.m2` uses the same variables as `.env`, described in [Configuration](#configuration), plus the ones below. Optional values are read only when set, and each default is listed in `.env.example`.
-
-| Variable | Used by | Meaning | Default |
-|---|---|---|---|
-| `AUDIT_TOKEN` | Aggregator | Bearer token of the Audit API. | secret |
-| `PANTAI_AUTH_TOKEN` | Sensor Pantai, Aggregator | Shared Sensor Pantai token. | secret |
-| `SATELLITE_TOKEN` | Aggregator | Group token for the satellite feed. Without it the satellite adapter stays off. | unset |
-| `SOURCE_LEASE_DURATION`, `SOURCE_LEASE_RENEW_DEADLINE`, `SOURCE_LEASE_RETRY_PERIOD` | Aggregator | Ingestion lease timing. A leader that misses the renew deadline stops writing. | `15s`, `10s`, `2s` |
-| `SENSOR_POLL_INTERVAL`, `SENSOR_TIMEOUT`, `SENSOR_STALE_AFTER` | Aggregator | Sensor Pantai polling, request timeout, and the age after which its data is stale. | `1s`, `2s`, `5m` |
-| `SHARD_DEADLINE`, `READ_HEDGE_DELAY`, `SHARD_READ_WORKERS` | Aggregator | Per-copy read deadline, delay before a hedged read to the second copy, and parallel shard reads. | `400ms`, `150ms`, `8` |
-| `REFILL_VERIFY_ATTEMPTS` | Aggregator | Verification attempts per refilled copy. | `5` |
-| `DATA_INGEST_POOL_SIZE`, `DATA_QUERY_POOL_SIZE` | Aggregator | Connection pools per Canonical Store node. | `4`, `8` |
-| `HAZARD_READ_CACHE_TTL` | Aggregator | First-page read cache, `0s` turns it off. | `1s` |
-| `AUDIT_TIMEOUT`, `OPS_CAPACITY` | Aggregator | Audit API request deadline and concurrent Internal Ops requests. | `10s`, `2` |
-
-### Observability
-
-With telemetry enabled, the Aggregator, Auth, and Client API export traces to Jaeger and metrics to VictoriaMetrics over OTLP, with 10% trace sampling. The dashboard `Atlas observability` in VictoriaMetrics shows request rate, 5xx rate, and p95 latency per service, plus satellite lag, capacity rejections by client class, broker messages ready per queue, field report publish-to-ack latency, outbox backlog, copy refills, source polls, the active lease holder and writer epoch, stale writer rejections, and the Sensor Pantai circuit breaker. BMKG, PVMBG, the consumers, and the notifier have no exporter. Their queues are measured from the Aggregator through the broker, and their JSON logs carry the correlation ID like every other service.
-
-```sh
-kubectl -n $ns logs deploy/aggregator -f | grep <correlation-id>
-```
-
-### M2 test scenarios
-
-Practice scenarios of the Tester Agent cover the injected failures, such as node loss, clock skew, network delay, and mock outages. List them and run one at any time. Freezing a VM is done by hand on its host.
-
-```sh
-kubectl exec -n tester-agent daemonset/tester-agent -- /app list
-kubectl exec -n tester-agent daemonset/tester-agent -- /app run practice <name>
-kubectl logs -n tester-agent daemonset/tester-agent
-```
-
-**P1. Distributed storage.** Check where each event lives and that the replicas agree, before and after a node is lost or wiped. `make data-integration` runs the wipe, refill, and node join tests locally.
-
-```sh
-curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/audit/location?hazard_id=<hazard-id>'
-curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/checksum
-```
-
-**P2. Leadership and scaling.** Delete the leader pod, or skew a node's clock with the Tester Agent, and watch the lease move in the Aggregator logs and the `Active source lease holder` panel. For the load criteria, run k6 together with `loadtest/scale.sh`. The k6 summary reports throughput from complete HTTP 200 responses only. Partial 200s, 429s, and failed requests are counted separately. A port forward is a single tunnel and caps throughput, so for these runs start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`.
-
-```sh
-# Criterion 6: 10,000 VUs while the Aggregator goes from 3 to 5 to 2 instances
-k6 run -e SCENARIO=sustained -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
-loadtest/scale.sh scale
-# Criterion 7: the same run with 1 Aggregator and with 3, then compare the throughput lines
-for replicas in 1 3; do
-  kubectl -n $ns scale deployment/aggregator --replicas=$replicas
-  kubectl -n $ns rollout status deployment/aggregator
-  k6 run -e SCENARIO=throughput -e VUS=500 -e DURATION=150s -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js
-done
-# Criterion 8: a version swap under a steady 200 req/s fails k6 if any request fails
-k6 run -e SCENARIO=rollout -e DURATION=300s -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET loadtest/m2.js &
-loadtest/scale.sh rollout <new-tag>
-```
-
-The two criterion 7 runs must use identical `VUS`, `DURATION`, and `THINK_TIME`, from the same k6 machine, so the 2.0× comparison is valid. Criterion 8 allows no failed request, so the `rollout` scenario counts a 429 as a failure too. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request k6 could not send. `STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
-
-**P3. Unreadable source data.** Switch PVMBG to schema 3, 4, or 5. Payloads that break the contract, including oversized ones, are parked with their reason and full body, and Internal Ops can inspect and replay them. Field Team reports are accepted through `POST /field-reports`.
-
-Schema change policy. The Aggregator never guesses what a changed field means.
-
-| Change | Example | Behavior |
-|---|---|---|
-| New optional field | PVMBG schema 2 adds `confidence_level` | Accepted automatically. Unmapped fields are kept in `attributes`, and a known optional field is validated, such as `confidence_level` in 0 to 1. |
-| Field renamed | PVMBG schema 3, `ash_column_height_m` becomes `ash_height_m` | Rejected and parked as `schema_violation`, not retryable. Accepted only after `accept_ash_rename` is set. |
-| Type changed | PVMBG schema 4, `eruption_count_24h` becomes a string | Rejected and parked as `schema_violation`, not retryable. Accepted only after `accept_string_count` is set. |
-| Required field missing | PVMBG schema 5 drops `volcano_id` | Rejected and parked as `schema_violation`, not retryable. Accepted only for the reports listed in `volcano_by_report`. |
-| Broken body | Truncated JSON, nesting deeper than 32, invalid UTF-8, a body over 4 MiB | Parked whole with its SHA-256. Bad records are isolated, so the other records still go through. A body cut off by a network error is marked retryable, and every other broken body is permanent. |
-
-The opt-in decisions live in `deploy/k8s/base/policy.json`, which becomes the `source-schema-policy` ConfigMap. The default `{}` accepts nothing beyond new optional fields. The Aggregator reads the file on each poll, so after the ConfigMap is applied (the kubelet syncs it within about a minute) replay the parked messages:
-
-```sh
-# deploy/k8s/base/policy.json: {"accept_ash_rename": true, "accept_string_count": true}
-make deploy-demo DEPLOY_ARGS="..."
-curl -X POST -H 'Authorization: Bearer <internal-ops-token>' -d '{"source":"PVMBG","reason_code":"schema_violation"}' http://localhost:8080/internal-ops/replay
-```
-
-```sh
-kubectl -n $ns exec deploy/pvmbg -- wget -qO- --post-data '{"version":4}' http://127.0.0.1:8082/admin/schema-version
-curl -H 'Authorization: Bearer <internal-ops-token>' http://localhost:8080/internal-ops/unprocessed
-curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/unprocessed
-```
-
-**P4. Satellite feed.** With `SATELLITE_TOKEN` set, the Aggregator reads the satellite feed and stores one `SATELIT` event per fire. Compare the Audit API output with a reference file.
-
-```sh
-curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/audit/events?source=SATELIT&limit=1000' > satellite.json
-python scripts/satellite-reference-diff.py --actual satellite.json --reference <reference.json>
-```
-
-**P5. Sensor Pantai and the Field Team alert path.** Run the Sensor Pantai practice scenarios through the Tester Agent. The overload scenario floods the Client API as Media while Field Team keeps reading, and must reject only Media.
-
-```sh
-k6 run -e SCENARIO=overload -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID -e MEDIA_CLIENT_SECRET=$MEDIA_CLIENT_SECRET \
-  -e FIELD_TEAM_CLIENT_ID=$FIELD_TEAM_CLIENT_ID -e FIELD_TEAM_CLIENT_SECRET=$FIELD_TEAM_CLIENT_SECRET loadtest/m2.js
-```
-
-The alert path has two objectives: no critical event lost, and 99% of critical events delivered within 5 s. `scripts/error-budget.py` takes the expected critical events from Sensor Pantai itself, so an event lost before Atlas stored it still counts. It matches them with the notifier log and reports how much of each budget a window used. Critical observations that break the base contract are parked by design and reported on their own line. The latency objective uses the notifier's latency from Atlas ingestion, and the report adds the time from `observed_at` to delivery.
-
-`kubectl logs` reads only the current notifier pod, so deliveries logged by a pod that restarted or moved would look lost. Start `scripts/notifier-log.sh` before the game day. It keeps appending the log to a file across restarts. Stop it afterwards and feed the file to the script.
-
-```sh
-scripts/notifier-log.sh notifier.log &
-# ... game day ...
-kill %1
-python scripts/error-budget.py --sensor http://localhost:18080 --since 2026-11-22T10:00:00Z < notifier.log
-```
-
-## Source mocks
-
-BMKG (`8081`) and PVMBG (`8082`) are passive. Each starts with 24 deterministic seed records and generates one new record every `SOURCE_EVENT_INTERVAL`. Each agency stores its records in its own PostgreSQL server (`bmkg-db`, `pvmbg-db`), on a network that only that agency joins. A restarted mock keeps its history and, for PVMBG, its schema version. The outage switch is not stored, so a restart always comes back without an outage. The `since` filter includes records at the requested timestamp.
-
-```sh
-curl -H "X-BMKG-Key: $BMKG_API_KEY" 'http://localhost:8081/seismic-events?since=2026-09-29T12:00:00Z'
-curl -H "X-BMKG-Key: $BMKG_API_KEY" http://localhost:8081/tsunami-warnings
-curl -H "Authorization: Bearer $PVMBG_TOKEN" http://localhost:8082/volcanic-reports
-curl http://localhost:8082/health      # shows the current schema version
-```
-
-## Client API and Auth
-
-Auth serves `POST /auth/login` with `{client_id, client_secret}` and `POST /auth/refresh` with `{refresh_token}`. Both return `{access_token, token_type, expires_in, refresh_token}`. `token_type` is `Bearer`, and `expires_in` is in seconds. Errors use `{"error":{"code":"..."}}`.
-
-Access JWTs are never stored. Auth stores the refresh-token hash and the session version in its own database. The Client API verifies the JWT locally, then calls `POST /auth/validate` with `{session_id, token_version}` using a dedicated internal bearer credential. A valid current session returns `{active:true}`. There is no positive validation cache, so a refresh immediately supersedes earlier access tokens. An unavailable Auth gives 503.
-
-`GET /hazards` accepts the Aggregator filters `source`, `hazard_type`, `severity`, `since`, and `limit`, and returns the freshness of each source in `sources`. That freshness block contains only `source`, `status`, `last_success_at`, and `stale_since`. Unknown envelope fields and dependency diagnostics are not forwarded. A malformed Aggregator response gives 502. Local overload and an Aggregator 429 both give a public 429 with `Retry-After`.
-
-| View | Fields | Allowed clients |
-|---|---|---|
-| `summary` (default) | `hazard_id`, `source`, `hazard_type`, `severity`, `area_name`, `occurred_at`, `ingested_at` | All three identities |
-| `raw` | All canonical fields, including coordinates, `source_ref_id`, and `attributes` | Field Team and Internal Ops |
-
-## Aggregator internal API
-
-`GET /internal/hazards` supports `source`, `hazard_type`, `severity`, inclusive `since=<RFC3339>`, and `limit` (1 to 500, default 100). Responses contain `data` and the freshness of each source in `sources`. A response is 200 even when one source is unavailable, and that source shows `"status":"unavailable"`. It is 503 only when every requested source is unavailable.
-
-The Aggregator publishes no host port, so query it from inside its container.
-
-```sh
-docker compose exec aggregator wget -qO- http://127.0.0.1:8083/health
-docker compose exec aggregator sh -c   'wget -qO- --header "Authorization: Bearer $AGGREGATOR_INTERNAL_TOKEN" "http://127.0.0.1:8083/internal/hazards?source=BMKG&limit=20"'
-```
-
-BNPB Internal Ops can inspect parked M2 payloads through `GET /internal-ops/unprocessed` with an `ops:read` token. For an item with `raw_chunked: true`, request `?source=<source>&message_id=<message_id>&part=0` on the same endpoint. Base64-decode each response's `data` and follow `next_part` until it is `null`. Concatenate the decoded bytes in order and compare them with the listed `raw_length` and `raw_sha256`.
-
-## Hazard revisions and late tsunami warnings
-
-A new hazard starts at `revision=1`. If severity, area, coordinates, occurrence time, or attributes change, the Aggregator updates the same stored hazard, increments its revision, and publishes its committed snapshot. `hazard_id` and the original `ingested_at` stay the same. Identical polling results do not increment the revision or publish a message. JSON key order and whitespace do not count as changes. Joined warnings are ordered by warning ID.
-
-For example, a seismic event is published as revision 1. A related tsunami warning that arrives three minutes later updates severity and `attributes.tsunami_warnings`, and publishes revision 2. The warning joins only events with `potential_tsunami=true`, within the one-hour warning lookback. Broker messages contain `revision` and use `message_id=<hazard_id>:<revision>`, and retries keep that identity. Revision is visible in the Aggregator API and the raw Client API view. The summary view keeps its specified fields.
-
-Publication uses a bounded in-memory publisher, not a transactional outbox. A crash between save and publish, or exhausted retries, can lose a publication, so a stored revision does not by itself guarantee delivery. The M1 spec does not define late-warning publication, so this policy is a team decision.
-
-## Event consumers
-
-Both consumers have separate durable queues and separate persistent idempotency files. The stored effect is one ledger entry per `(hazard_id, revision)`, so the effect and the duplicate marker are the same durable record. The consumer appends and syncs that record before ACK, and a duplicate adds no record. On restart it reloads complete records and repairs an interrupted final append. Each ledger has one writer. It grows with processed IDs and is not designed for multiple replicas.
-
-The supported M1 outage is 30 seconds, at up to two events per second and payloads up to 32 KiB, with catch-up within 60 seconds after restart. New queues keep messages for one hour, bounded by 10,000 ready messages and 64 MiB of payload. Beyond those bounds, TTL expires old messages, or `reject-publish` returns a publisher NACK. Retries can deliver duplicate copies to other queues. See RabbitMQ's [queue limits](https://www.rabbitmq.com/docs/maxlength) and [message TTL](https://www.rabbitmq.com/docs/ttl). This is at-least-once processing of retained deliveries, with no guarantee for unlimited outages or historical replay.
-
-Consumers reuse an existing queue without redeclaring its arguments, and create only a missing queue with the configured limits. The limits are code defaults that the service environment can override, and a changed value does not alter an existing queue. Compose gives each consumer, including the optional third one, its own state volume.
-
-## Test scenarios
-
-Each problem lists the manual steps for a live demo, then the automated check. `make demo P=Px` runs only that problem's checks on a fresh stack.
-
-### P1. Live schema change
+#### M1 P1. Live schema change
 
 Start the stack and let the Aggregator ingest the original schema. Then switch PVMBG to schema version 2 without restarting anything. Reports created after the switch carry `confidence_level`, and the Aggregator stores it in `attributes`. Earlier reports keep their original shape.
 
@@ -310,7 +312,7 @@ curl -X POST http://localhost:8082/admin/schema-version -d '{"version":1}'   # s
 make demo P=P1
 ```
 
-### P2. Slow source, outage, and load
+#### M1 P2. Slow source, outage, and load
 
 For the three-second delay, set `PVMBG_MIN_RESPONSE_DELAY=3s` and `PVMBG_MAX_RESPONSE_DELAY=3s` in `.env`, then recreate only PVMBG. Other containers keep running.
 
@@ -318,7 +320,7 @@ For the three-second delay, set `PVMBG_MIN_RESPONSE_DELAY=3s` and `PVMBG_MAX_RES
 docker compose up -d pvmbg
 ```
 
-Switch the PVMBG outage on and off at any time. Mode `error` returns 503 at once. Mode `hang` sends no response, like a dead host. Reports keep accumulating during the outage, and the Aggregator catches up after recovery. During the outage, `GET /hazards?source=PVMBG` returns the last stored data and marks PVMBG with `stale_since`.
+Switch the PVMBG outage on and off at any time. Mode `error` returns 503 at once, and mode `hang` sends no response, like a dead host. Reports keep accumulating during the outage, and the Aggregator catches up after recovery. During the outage, `GET /hazards?source=PVMBG` returns the last stored data and marks PVMBG with `stale_since`.
 
 ```sh
 curl -X POST http://localhost:8082/admin/outage -d '{"enabled":true,"mode":"error"}'
@@ -333,13 +335,14 @@ CLIENT_ID=$INTERNAL_OPS_CLIENT_ID CLIENT_SECRET=$INTERNAL_OPS_CLIENT_SECRET k6 r
 CLIENT_ID=$INTERNAL_OPS_CLIENT_ID CLIENT_SECRET=$INTERNAL_OPS_CLIENT_SECRET k6 run -e SCENARIO=burst loadtest/p2.js
 ```
 
-The sustained scenario runs 40 BMKG-only and 20 volcanic virtual users for 90 seconds. Each user keeps its own connection and refreshes its token before the 60-second TTL ends. The burst scenario runs 400 users for 20 seconds, which exceeds Client API capacity and must produce counted 429 responses without unexpected errors.
+The sustained scenario runs 40 BMKG-only and 20 volcanic virtual users for 90 seconds. Each user keeps its own connection and refreshes its token before the 60-second TTL ends. The burst scenario runs 400 users for 20 seconds, which exceeds Client API capacity and must produce counted 429 responses without unexpected errors. The demo records timestamped connection samples and requires an interval of at least 60 seconds with 50 or more connections at every sample. A count below 50 or a sampling gap longer than five seconds resets the interval. The samples and k6 summaries are saved under `P2/` in the run's evidence folder, and the report records the longest qualifying interval.
 
-The demo records timestamped connection samples and requires an interval of at least 60 seconds with 50 or more connections at every sample. A count below 50 or a sampling gap longer than five seconds resets the interval. The samples and k6 summaries are saved under `P2/` in the run's evidence folder, and the report records the longest qualifying interval.
+<details>
+<summary>k6 variables of `loadtest/p2.js`</summary>
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SCENARIO` | `sustained` | `sustained` for P2.1 and P2.2, or `burst` for controlled rejection. |
+| `SCENARIO` | `sustained` | `sustained` for the sustained load, or `burst` for controlled rejection. |
 | `BMKG_VUS`, `VOLCANIC_VUS` | `40`, `20` | Sustained virtual users per request kind. |
 | `BURST_VUS` | `400` | Burst virtual users. |
 | `DURATION` | `90s` or `20s` | Test length. |
@@ -347,7 +350,9 @@ The demo records timestamped connection samples and requires an interval of at l
 | `BASE_URL`, `AUTH_URL` | `http://localhost:8080`, `http://localhost:8084` | Client API and Auth addresses. |
 | `SUMMARY_JSON`, `SUMMARY_TEXT` | unset | Files for the full k6 summary and the printed table. |
 
-### P3. Credentials and access tokens
+</details>
+
+#### M1 P3. Credentials and access tokens
 
 Each mock rejects the other agency's credential.
 
@@ -380,7 +385,7 @@ curl -s http://localhost:8084/auth/refresh \
 make demo P=P3
 ```
 
-### P4. Independent services and flexible storage
+#### M1 P4. Independent services and flexible storage
 
 Rebuild and restart only the Aggregator. The other containers keep running, and requests that do not need the Aggregator, such as an Auth login or a BMKG read, keep answering during the rebuild.
 
@@ -390,7 +395,7 @@ docker compose ps
 curl -H "X-BMKG-Key: $BMKG_API_KEY" http://localhost:8081/seismic-events
 ```
 
-The Canonical Store keeps unmapped fields in the JSONB `attributes` column, so records from before and after the P1 switch sit side by side with no migration. Count both shapes.
+The Canonical Store keeps unmapped fields in the JSONB `attributes` column, so records from before and after the M1 P1 switch sit side by side with no migration. Count both shapes.
 
 ```sh
 docker compose exec -T postgres psql -U atlas_admin -d canonical -c \
@@ -404,9 +409,9 @@ docker network inspect atlas_canonical -f '{{range .Containers}}{{.Name}} {{end}
 make demo P=P4
 ```
 
-### P5. Fanout to independent consumers
+#### M1 P5. Fanout to independent consumers
 
-Stop Consumer A while source events continue, and confirm Consumer B keeps processing and the Aggregator keeps publishing.
+Stop Consumer A while source events continue, and confirm that Consumer B keeps processing and the Aggregator keeps publishing.
 
 ```sh
 docker compose stop consumer-a
@@ -424,20 +429,21 @@ docker compose --profile consumer-c-demo stop consumer-c-demo
 make demo P=P5
 ```
 
-## Checks
+</details>
 
-Each test layer has one job, so no behavior is asserted twice.
+## 4. Checks
+
+Each test layer has one job, so no behavior is asserted twice. The table lists the layers and what each one proves.
 
 | Layer | Command | Proves |
 |---|---|---|
 | Unit | `make ci` | Logic inside one service, such as mapping rules, scopes, and credentials. CI runs this layer. |
-| Integration | `make integration` | One service against real PostgreSQL or RabbitMQ, such as checkpoints, grants, queue limits, and the save/publish crash gap. |
+| Integration | `make integration` | One service against real PostgreSQL or RabbitMQ, such as checkpoints, grants, queue limits, and the save and publish crash gap. |
+| Data integration | `make data-integration` | Wipe, refill, and node join on the sharded store. |
 | Demo | `make demo` | Every specification criterion, black-box, on a fresh Compose stack. |
-| Load | `make demo LOAD=1` | Demo plus the P2 sustained and overload k6 runs. |
+| Load | `make demo LOAD=1` | The demo plus the sustained and overload k6 runs. |
 
-Demo checks are named by the criterion they prove, for example `P2.3 outage serves stale volcanic data and fresh seismic data`. `S1` is the source contract, and `R1` to `R7` are the implementation rules. Every run, full or filtered, writes `demo.md` and `demo.json` to its own `evidence/YYYY-MM-DD_HH-MM-SS_WIB/` folder. `demo.md` is a matrix of every check and criterion, and `demo.json` holds the evidence each check recorded. Stack state, including the generated secrets, stays in the gitignored `.demo/` folder.
-
-For a live demonstration, run one problem at a time. `KEEP=1` keeps the stack between runs to skip the startup.
+Demo checks are named by the criterion they prove, for example `P2.3 outage serves stale volcanic data and fresh seismic data`. `S1` is the source contract, and `R1` to `R7` are the implementation rules. Every run, full or filtered, writes `demo.md` and `demo.json` to its own `evidence/YYYY-MM-DD_HH-MM-SS_WIB/` folder. `demo.md` is a matrix of every check and criterion, and `demo.json` holds the evidence each check recorded. Stack state, including the generated secrets, stays in the gitignored `.demo/` folder. For a live demonstration, run one problem at a time, and `KEEP=1` keeps the stack between runs to skip the startup.
 
 ```sh
 make demo P=P1 KEEP=1
@@ -446,9 +452,78 @@ make demo P=P2 KEEP=1 LOAD=1
 make demo P=P5
 ```
 
-The suite needs Docker and Go, and it runs on Linux, macOS, and Windows. P3.3 waits for a real 60-second token expiry, so a full run takes about 10 minutes.
+The suite needs Docker and Go, and it runs on Linux, macOS, and Windows. The check `P3.3` waits for a real 60-second token expiry, so a full run takes about 10 minutes.
 
-## Compose networks
+## 5. Reference
+
+The sections below describe the contracts that the demo relies on. Each one is collapsed, so open only what is needed.
+
+<details>
+<summary>Source mocks</summary>
+
+BMKG (`8081`) and PVMBG (`8082`) are passive. Each starts with 24 deterministic seed records and generates one new record every `SOURCE_EVENT_INTERVAL`. Each agency stores its records in its own PostgreSQL server (`bmkg-db`, `pvmbg-db`), on a network that only that agency joins. A restarted mock keeps its history and, for PVMBG, its schema version. The outage switch is not stored, so a restart always comes back without an outage. The `since` filter includes records at the requested timestamp.
+
+```sh
+curl -H "X-BMKG-Key: $BMKG_API_KEY" 'http://localhost:8081/seismic-events?since=2026-09-29T12:00:00Z'
+curl -H "X-BMKG-Key: $BMKG_API_KEY" http://localhost:8081/tsunami-warnings
+curl -H "Authorization: Bearer $PVMBG_TOKEN" http://localhost:8082/volcanic-reports
+curl http://localhost:8082/health      # shows the current schema version
+```
+
+</details>
+
+<details>
+<summary>Client API and Auth</summary>
+
+Auth serves `POST /auth/login` with `{client_id, client_secret}` and `POST /auth/refresh` with `{refresh_token}`. Both return `{access_token, token_type, expires_in, refresh_token}`. `token_type` is `Bearer`, and `expires_in` is in seconds. Errors use `{"error":{"code":"..."}}`.
+
+Access JWTs are never stored. Auth stores the refresh-token hash and the session version in its own database. The Client API verifies the JWT locally, then calls `POST /auth/validate` with `{session_id, token_version}` using a dedicated internal bearer credential. A valid current session returns `{active:true}`. There is no positive validation cache, so a refresh immediately supersedes earlier access tokens. An unavailable Auth gives 503.
+
+`GET /hazards` accepts the Aggregator filters `source`, `hazard_type`, `severity`, `since`, and `limit`, and returns the freshness of each source in `sources`. That block contains only `source`, `status`, `last_success_at`, and `stale_since`. Unknown envelope fields and dependency diagnostics are not forwarded. A malformed Aggregator response gives 502. Local overload and an Aggregator 429 both give a public 429 with `Retry-After`. The table below lists the two views.
+
+| View | Fields | Allowed clients |
+|---|---|---|
+| `summary` (default) | `hazard_id`, `source`, `hazard_type`, `severity`, `area_name`, `occurred_at`, `ingested_at` | All three identities |
+| `raw` | All canonical fields, including coordinates, `source_ref_id`, and `attributes` | Field Team and Internal Ops |
+
+</details>
+
+<details>
+<summary>Aggregator internal API</summary>
+
+`GET /internal/hazards` supports `source`, `hazard_type`, `severity`, inclusive `since=<RFC3339>`, and `limit` (1 to 500, default 100). Responses contain `data` and the freshness of each source in `sources`. A response is 200 even when one source is unavailable, and that source shows `"status":"unavailable"`. It is 503 only when every requested source is unavailable. The Aggregator publishes no host port on Compose, so query it from inside its container.
+
+```sh
+docker compose exec aggregator wget -qO- http://127.0.0.1:8083/health
+docker compose exec aggregator sh -c   'wget -qO- --header "Authorization: Bearer $AGGREGATOR_INTERNAL_TOKEN" "http://127.0.0.1:8083/internal/hazards?source=BMKG&limit=20"'
+```
+
+BNPB Internal Ops can inspect parked M2 payloads through `GET /internal-ops/unprocessed` with an `ops:read` token. For an item with `raw_chunked: true`, request `?source=<source>&message_id=<message_id>&part=0` on the same endpoint. Base64-decode each response's `data` and follow `next_part` until it is `null`. Concatenate the decoded bytes in order and compare them with the listed `raw_length` and `raw_sha256`.
+
+</details>
+
+<details>
+<summary>Hazard revisions and late tsunami warnings</summary>
+
+A new hazard starts at `revision=1`. If severity, area, coordinates, occurrence time, or attributes change, the Aggregator updates the same stored hazard, increments its revision, and publishes its committed snapshot. `hazard_id` and the original `ingested_at` stay the same. Identical polling results do not increment the revision or publish a message, and JSON key order and whitespace do not count as changes. Joined warnings are ordered by warning ID.
+
+For example, a seismic event is published as revision 1. A related tsunami warning that arrives three minutes later updates severity and `attributes.tsunami_warnings`, and publishes revision 2. The warning joins only events with `potential_tsunami=true`, within the one-hour warning lookback. Broker messages contain `revision` and use `message_id=<hazard_id>:<revision>`, and retries keep that identity. Revision is visible in the Aggregator API and the raw Client API view, while the summary view keeps its specified fields.
+
+Publication uses a bounded in-memory publisher, not a transactional outbox. A crash between save and publish, or exhausted retries, can lose a publication, so a stored revision does not by itself guarantee delivery. The M1 spec does not define late-warning publication, so this policy is a team decision.
+
+</details>
+
+<details>
+<summary>Event consumers</summary>
+
+Both consumers have separate durable queues and separate persistent idempotency files. The stored effect is one ledger entry per `(hazard_id, revision)`, so the effect and the duplicate marker are the same durable record. The consumer appends and syncs that record before ACK, and a duplicate adds no record. On restart it reloads complete records and repairs an interrupted final append. Each ledger has one writer, grows with processed IDs, and is not designed for multiple replicas.
+
+The supported M1 outage is 30 seconds, at up to two events per second and payloads up to 32 KiB, with catch-up within 60 seconds after restart. New queues keep messages for one hour, bounded by 10,000 ready messages and 64 MiB of payload. Beyond those bounds, TTL expires old messages, or `reject-publish` returns a publisher NACK. Retries can deliver duplicate copies to other queues. See RabbitMQ's [queue limits](https://www.rabbitmq.com/docs/maxlength) and [message TTL](https://www.rabbitmq.com/docs/ttl). This is at-least-once processing of retained deliveries, with no guarantee for unlimited outages or historical replay. Consumers reuse an existing queue without redeclaring its arguments and create only a missing queue with the configured limits. A changed limit does not alter an existing queue, and Compose gives each consumer, including the optional third one, its own state volume.
+
+</details>
+
+<details>
+<summary>Compose networks</summary>
 
 Each network admits only the services that need it. The table lists the members and the purpose of each.
 
@@ -464,3 +539,5 @@ Each network admits only the services that need it. The table lists the members 
 | `events` | RabbitMQ, Aggregator, consumers | Fanout publication and subscriptions. |
 
 The Client API belongs to no database network and receives no database credentials. BNPB's PostgreSQL server is shared infrastructure with separate `auth` and `aggregator` roles, and database grants deny cross-owner connections. Network separation controls reachability, and database grants control ownership on the shared server.
+
+</details>
