@@ -111,7 +111,7 @@ Deploy the whole system with one command. It builds the images, imports them on 
 make deploy-demo DEPLOY_ARGS="--context <context> --load-vms <ssh-node-a> <ssh-node-b> <ssh-node-c>"
 ```
 
-`make deploy-demo` is shorthand for `python scripts/deploy-k8s.py --build --overlay demo --enable-ingestion --enable-telemetry` followed by `DEPLOY_ARGS`. The first run creates the ignored file `.env.m2` with fresh credentials, and later runs reuse it. Before the exam, replace `AUDIT_TOKEN`, `PANTAI_AUTH_TOKEN`, and `SATELLITE_TOKEN` in `.env.m2` with the values the assistants give, then run the command again. Credentials become Secrets and settings become ConfigMaps, and no secret appears in a manifest or in the command output.
+`make deploy-demo` is shorthand for `python scripts/deploy-k8s.py --build --overlay demo --enable-ingestion --enable-telemetry` followed by `DEPLOY_ARGS`. The first run creates the ignored file `.env.m2` with fresh credentials, and later runs reuse it. Before the exam, replace `AUDIT_TOKEN` and `PANTAI_AUTH_TOKEN` in `.env.m2` with the values the assistants give, add a line `SATELLITE_TOKEN=<group-token>` (the script does not create it, and `.env.example` does not list it), then run the command again. Credentials become Secrets and settings become ConfigMaps, and no secret appears in a manifest or in the command output.
 
 Install the Tester Agent with the assistants' manifest, unmodified.
 
@@ -166,6 +166,13 @@ kubectl exec -n tester-agent daemonset/tester-agent -- /app run practice <name>
 kubectl logs -n tester-agent daemonset/tester-agent
 ```
 
+After `wipe-node`, do not power the wiped VM back on right away. The run is still marked `go` in the Tester Agent's ConfigMap `tester-run`, so the agent on that node shuts it down again as soon as it starts. Run a light scenario such as `schema` first, which replaces the run, and only then start the VM.
+
+```sh
+kubectl exec -n tester-agent daemonset/tester-agent -- /app run practice schema
+kubectl -n tester-agent get configmap tester-run -o yaml   # the wipe-node run is no longer the active one
+```
+
 **P1. Distributed storage.** Check where each event lives and that the replicas agree, before and after a node is lost or wiped. `make data-integration` runs the wipe, refill, and node join tests locally.
 
 ```sh
@@ -173,7 +180,7 @@ curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/aud
 curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/checksum
 ```
 
-**P2. Leadership and scaling.** Delete the leader pod, or skew a node's clock with the Tester Agent, and watch the lease move in the Aggregator logs and the `Active source lease holder` panel. For the load criteria, run k6 together with `loadtest/scale.sh`. The k6 summary reports throughput from complete HTTP 200 responses only. Partial 200s, 429s, and failed requests are counted separately. A port forward is a single tunnel and caps throughput, so for these runs start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`.
+**P2. Leadership and scaling.** Delete the leader pod, or skew a node's clock with the Tester Agent, and watch the lease move in the Aggregator logs and the `Active source lease holder` panel. For the load criteria, run k6 together with `loadtest/scale.sh`. The k6 summary reports throughput from complete HTTP 200 responses only. Partial 200s, 429s, and failed requests are counted separately. A port forward is a single tunnel and caps throughput, so for these runs start k6 on a node and set `BASE_URL` and `AUTH_URL` to the ClusterIPs of `client-api` and `auth`, as listed by `kubectl -n $ns get svc`. Never run the 10,000 VU k6 on the control plane `atlas-node-a`. It hosts the API server, Auth, the Client API, and the broker, so k6 there starves the system it measures and can take the control plane down. Use a worker node or a separate machine that reaches the ClusterIPs, and keep the same machine for both criterion 7 runs.
 
 ```sh
 # Criterion 6: 10,000 VUs while the Aggregator goes from 3 to 5 to 2 instances
@@ -190,7 +197,14 @@ k6 run -e SCENARIO=rollout -e DURATION=300s -e MEDIA_CLIENT_ID=$MEDIA_CLIENT_ID 
 loadtest/scale.sh rollout <new-tag>
 ```
 
-The two criterion 7 runs must use identical `VUS`, `DURATION`, and `THINK_TIME`, from the same k6 machine, so the 2.0× comparison is valid. Criterion 8 allows no failed request, so the `rollout` scenario counts a 429 as a failure too. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request k6 could not send. `STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
+The two criterion 7 runs must use identical `VUS`, `DURATION`, and `THINK_TIME`, from the same k6 machine, so the 2.0× comparison is valid. Criterion 8 allows no failed request, so the `rollout` scenario counts a 429 as a failure too. It sends a constant `RATE` (default 200 req/s) below capacity and fails on any non-200 response, any 429, or any request k6 could not send. `<new-tag>` must already be imported on every node, or the new pods fail to pull. Build it and import it the way the deploy script does, without applying anything:
+
+```sh
+docker build -t atlas/aggregator:<new-tag> -f services/bnpb/aggregator/Dockerfile services/bnpb
+for vm in <ssh-node-a> <ssh-node-b> <ssh-node-c>; do docker image save atlas/aggregator:<new-tag> | ssh $vm sudo k3s ctr -n k8s.io images import -; done
+```
+
+`STEP_SECONDS` sets the wait before each change in `scale.sh`, and `VUS`, `RATE`, `DURATION`, and `THINK_TIME` size the k6 run.
 
 **P3. Unreadable source data.** Switch PVMBG to schema 3, 4, or 5. Payloads that break the contract, including oversized ones, are parked with their reason and full body, and Internal Ops can inspect and replay them. Field Team reports are accepted through `POST /field-reports`.
 
@@ -218,9 +232,11 @@ curl -H 'Authorization: Bearer <internal-ops-token>' http://localhost:8080/inter
 curl -H "Authorization: Bearer $AUDIT_TOKEN" http://localhost:8083/internal/audit/unprocessed
 ```
 
-**P4. Satellite feed.** With `SATELLITE_TOKEN` set, the Aggregator reads the satellite feed and stores one `SATELIT` event per fire. Compare the Audit API output with a reference file.
+**P4. Satellite feed.** With `SATELLITE_TOKEN` set, the Aggregator reads the satellite feed and stores one `SATELIT` event per fire. The token reaches the Aggregator only through the Secret `aggregator-credentials`, which `make deploy-demo` writes from `.env.m2`. Without it the Aggregator logs `satellite_disabled` and P4 never starts. Check the Secret after deploying, then compare the Audit API output with a reference file.
 
 ```sh
+kubectl -n $ns get secret aggregator-credentials -o jsonpath='{.data.SATELLITE_TOKEN}' | wc -c   # must be non-zero
+kubectl -n $ns logs deploy/aggregator | grep satellite_disabled                                 # must print nothing
 curl -H "Authorization: Bearer $AUDIT_TOKEN" 'http://localhost:8083/internal/audit/events?source=SATELIT&limit=1000' > satellite.json
 python scripts/satellite-reference-diff.py --actual satellite.json --reference <reference.json>
 ```
