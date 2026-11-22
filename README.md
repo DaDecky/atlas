@@ -33,7 +33,7 @@ All three nodes run on one physical host, so they share its CPU, memory, and dis
 | Aggregator | 3 | One per node, by anti-affinity and a topology spread constraint |
 | Canonical Store (`canonical-store`) | 3 | One per node, data on the node's local disk |
 | Auth | 2 | `atlas-node-a` |
-| Client API | 2 | Any node, placed by the scheduler (not pinned since PR #41) |
+| Client API | 3 | Any node, placed by the scheduler (not pinned since PR #41) |
 | BMKG, PVMBG, their databases, Auth database, RabbitMQ, consumers, notifier | 1 each | `atlas-node-a` |
 | Sensor Pantai | 1 | Scheduler's choice, vendor manifest unmodified |
 | VictoriaMetrics and Jaeger | 1 each | `atlas-node-a`, only with telemetry enabled |
