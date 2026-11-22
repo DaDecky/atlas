@@ -94,6 +94,8 @@ docker compose exec aggregator wget -qO- http://127.0.0.1:8083/health
 docker compose exec aggregator sh -c   'wget -qO- --header "Authorization: Bearer $AGGREGATOR_INTERNAL_TOKEN" "http://127.0.0.1:8083/internal/hazards?source=BMKG&limit=20"'
 ```
 
+BNPB Internal Ops can inspect parked M2 payloads through `GET /internal-ops/unprocessed` with an `ops:read` token. For an item with `raw_chunked: true`, request `?source=<source>&message_id=<message_id>&part=0` on the same endpoint. Base64-decode each response's `data` and follow `next_part` until it is `null`. Concatenate the decoded bytes in order and compare them with the listed `raw_length` and `raw_sha256`.
+
 ## Hazard revisions and late tsunami warnings
 
 A new hazard starts at `revision=1`. If severity, area, coordinates, occurrence time, or attributes change, the Aggregator updates the same stored hazard, increments its revision, and publishes its committed snapshot. `hazard_id` and the original `ingested_at` stay the same. Identical polling results do not increment the revision or publish a message. JSON key order and whitespace do not count as changes. Joined warnings are ordered by warning ID.

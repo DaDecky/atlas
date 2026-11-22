@@ -150,7 +150,7 @@ func copyParking(ctx context.Context, tx pgx.Tx, to *Store) error {
 		}
 
 		for _, m := range batch {
-			if err = to.restoreParked(ctx, m); err != nil {
+			if err = to.restoreParked(ctx, m, tx, "unprocessed_payload_chunks"); err != nil {
 				return err
 			}
 		}
@@ -415,7 +415,7 @@ func copyParkedPublications(ctx context.Context, snapshot pgx.Tx, to *Store) err
 				m.NextAttemptAt = &now
 			}
 
-			if err = root.restoreParked(ctx, m); err != nil {
+			if err = root.restoreParked(ctx, m, snapshot, "public.unprocessed_payload_chunks"); err != nil {
 				return err
 			}
 		}
@@ -502,6 +502,29 @@ func shardDigest(ctx context.Context, s *Store) (string, error) {
 	reports.Close()
 
 	if err != nil {
+		return "", err
+	}
+
+	chunks, err := tx.Query(ctx, `SELECT message_id,part,sha256(data) FROM unprocessed_payload_chunks ORDER BY message_id COLLATE "C",part`)
+	if err != nil {
+		return "", err
+	}
+
+	for chunks.Next() {
+		var (
+			id     string
+			part   int64
+			digest []byte
+		)
+		if err = chunks.Scan(&id, &part, &digest); err != nil {
+			chunks.Close()
+			return "", err
+		}
+
+		_, _ = fmt.Fprintf(hash, "parking_chunk %q %d %x\n", id, part, digest)
+	}
+
+	if err = chunks.Err(); err != nil {
 		return "", err
 	}
 
@@ -602,7 +625,7 @@ func replaceHolder(t *placement.Table, shard, old, node, storeID string) error {
 	return nil
 }
 
-func (s *Store) restoreParked(ctx context.Context, m ParkedMessage) error {
+func (s *Store) restoreParked(ctx context.Context, m ParkedMessage, snapshot pgx.Tx, chunkTable string) error {
 	tx, err := s.begin(ctx, false)
 	if err != nil {
 		return err
@@ -611,10 +634,67 @@ func (s *Store) restoreParked(ctx context.Context, m ParkedMessage) error {
 
 	_, err = tx.Exec(ctx, `INSERT INTO unprocessed_messages (`+parkingColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
  ON CONFLICT(message_id) DO UPDATE SET status=CASE WHEN unprocessed_messages.status='recovered' THEN 'recovered' ELSE EXCLUDED.status END,
- attempts=GREATEST(unprocessed_messages.attempts,EXCLUDED.attempts),next_attempt_at=EXCLUDED.next_attempt_at`, m.MessageID, m.Source, m.ReceivedAt, m.SourceRefID, m.Raw, m.RawLength, m.RawSHA256, m.RawCut, m.ReasonCode, m.Reason, m.Retryable, m.Attempts, m.NextAttemptAt, m.Status, m.CorrelationID)
+ attempts=GREATEST(unprocessed_messages.attempts,EXCLUDED.attempts),next_attempt_at=EXCLUDED.next_attempt_at,
+ raw=CASE WHEN unprocessed_messages.raw_cut AND $16::boolean THEN EXCLUDED.raw ELSE unprocessed_messages.raw END,
+ raw_cut=unprocessed_messages.raw_cut AND NOT $16::boolean`, m.MessageID, m.Source, m.ReceivedAt, m.SourceRefID, m.Raw, m.RawLength, m.RawSHA256, m.RawCut, m.ReasonCode, m.Reason, m.Retryable, m.Attempts, m.NextAttemptAt, m.Status, m.CorrelationID, m.RawChunked)
 	if err != nil {
 		return err
 	}
 
+	if m.RawChunked {
+		if err = restoreParkingPayload(ctx, snapshot, tx, chunkTable, m); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit(ctx)
+}
+
+func restoreParkingPayload(ctx context.Context, from, to pgx.Tx, sourceTable string, m ParkedMessage) error {
+	if _, err := to.Exec(ctx, `DELETE FROM unprocessed_payload_chunks WHERE message_id=$1`, m.MessageID); err != nil {
+		return err
+	}
+
+	rows, err := from.Query(ctx, `SELECT part,data FROM `+sourceTable+` WHERE message_id=$1 ORDER BY part`, m.MessageID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	hash := sha256.New()
+
+	var part, length int64
+
+	_, err = to.CopyFrom(ctx, pgx.Identifier{"unprocessed_payload_chunks"}, []string{"message_id", "part", "data"}, pgx.CopyFromFunc(func() ([]any, error) {
+		if !rows.Next() {
+			return nil, rows.Err()
+		}
+
+		var (
+			index int64
+			data  []byte
+		)
+		if err := rows.Scan(&index, &data); err != nil {
+			return nil, err
+		}
+
+		if index != part || int64(len(data)) != min(int64(parkingChunkBytes), m.RawLength-length) {
+			return nil, errors.New("parked payload chunks are incomplete")
+		}
+
+		part++
+		length += int64(len(data))
+		_, _ = hash.Write(data)
+
+		return []any{m.MessageID, index, data}, nil
+	}))
+	if err != nil {
+		return err
+	}
+
+	if length != m.RawLength || hex.EncodeToString(hash.Sum(nil)) != m.RawSHA256 {
+		return errors.New("refilled payload does not match parking metadata")
+	}
+
+	return nil
 }

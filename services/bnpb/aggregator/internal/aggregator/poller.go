@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"atlas/services/bnpb/aggregator/internal/decode"
@@ -40,6 +41,30 @@ type Poller struct {
 	PolicyFile                  string
 	Guard                       func(context.Context) error
 	OnPoll                      func(context.Context, string, time.Duration, error)
+}
+
+type oversizedBody struct {
+	file *os.File
+}
+
+func (b *oversizedBody) Write(data []byte) (int, error) {
+	if b.file == nil {
+		file, err := os.CreateTemp("", "atlas-oversized-*")
+		if err != nil {
+			return 0, err
+		}
+
+		b.file = file
+	}
+
+	return b.file.Write(data)
+}
+
+func (b *oversizedBody) remove() {
+	if b.file != nil {
+		_ = b.file.Close()
+		_ = os.Remove(b.file.Name())
+	}
 }
 
 func pause(ctx context.Context, d time.Duration) bool {
@@ -162,14 +187,18 @@ func (p *Poller) sourceRequest(ctx context.Context, path string, since *time.Tim
 
 // decodeRecords streams the body and parks each record or body that breaks the boundary rules.
 func (p *Poller) decodeRecords(ctx context.Context, path, id string, body io.Reader) ([]sourceRecord, error) {
-	var records []sourceRecord
+	var (
+		records   []sourceRecord
+		oversized oversizedBody
+	)
+	defer oversized.remove()
 
-	limits := decode.Limits{BodyBytes: min(cmp.Or(p.MaxSourceBytes, defaultMaxSourceBytes), defaultMaxSourceBytes), Records: cmp.Or(p.MaxRecords, defaultMaxSourceRecords)}
+	limits := decode.Limits{BodyBytes: min(cmp.Or(p.MaxSourceBytes, defaultMaxSourceBytes), defaultMaxSourceBytes), Records: cmp.Or(p.MaxRecords, defaultMaxSourceRecords), Oversized: &oversized}
 
 	err := decode.Array(body, limits, func(record decode.Record) error {
 		if record.Code != "" {
 			p.reject(id, "", record.Code)
-			return p.park(ctx, path, id, record.Raw, record.Code, "record failed boundary validation", nil)
+			return p.park(ctx, path, id, record.Raw, record.Code, "record failed boundary validation", nil, nil)
 		}
 
 		records = append(records, sourceRecord{Object: Object(record.Object), Raw: record.Raw})
@@ -185,7 +214,17 @@ func (p *Poller) decodeRecords(ctx context.Context, path, id string, body io.Rea
 		return nil, err
 	}
 
-	if err = p.park(ctx, path, id, issue.Raw, issue.Code, "source body failed boundary validation", issue); err != nil {
+	var payload io.ReaderAt
+	if oversized.file != nil {
+		payload = oversized.file
+
+		var cancel context.CancelFunc
+
+		ctx, cancel = context.WithTimeout(ctx, cmp.Or(p.Timeout, defaultSourceTimeout))
+		defer cancel()
+	}
+
+	if err = p.park(ctx, path, id, issue.Raw, issue.Code, "source body failed boundary validation", issue, payload); err != nil {
 		return nil, err
 	}
 
@@ -224,7 +263,7 @@ func (p *Poller) fetchWarnings(ctx context.Context, checkpoint *time.Time, id st
 			p.reject(id, ref, err.Error())
 
 			if !seen[ref] {
-				if parkErr := p.park(ctx, "/tsunami-warnings", id, record.Raw, "schema_violation", err.Error(), nil); parkErr != nil {
+				if parkErr := p.park(ctx, "/tsunami-warnings", id, record.Raw, "schema_violation", err.Error(), nil, nil); parkErr != nil {
 					return nil, parkErr
 				}
 			}
@@ -306,7 +345,7 @@ func (p *Poller) mapRecords(ctx context.Context, id string, src pollerSource, ra
 			ref, _ := textField(o, src.idField)
 			p.reject(id, ref, err.Error())
 
-			if parkErr := p.park(ctx, src.path, id, record.Raw, "schema_violation", err.Error(), nil); parkErr != nil {
+			if parkErr := p.park(ctx, src.path, id, record.Raw, "schema_violation", err.Error(), nil, nil); parkErr != nil {
 				return nil, nil, nil, parkErr
 			}
 

@@ -1,12 +1,14 @@
 package aggregator
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,6 +23,7 @@ type ParkedMessage struct {
 	RawLength     int64      `json:"raw_length"`
 	RawSHA256     string     `json:"raw_sha256"`
 	RawCut        bool       `json:"raw_cut"`
+	RawChunked    bool       `json:"raw_chunked,omitempty"`
 	ReasonCode    string     `json:"reason_code"`
 	Reason        string     `json:"reason"`
 	Retryable     bool       `json:"retryable"`
@@ -28,6 +31,7 @@ type ParkedMessage struct {
 	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
 	Status        string     `json:"status"`
 	CorrelationID string     `json:"correlation_id"`
+	payload       io.ReaderAt
 }
 
 type ParkingPage struct {
@@ -37,9 +41,15 @@ type ParkingPage struct {
 	UnavailableUnits []string        `json:"unavailable_units,omitempty"`
 }
 
+type ParkingPart struct {
+	Data     []byte `json:"data"`
+	NextPart *int64 `json:"next_part"`
+}
+
 type Parking interface {
 	Park(context.Context, ParkedMessage) error
 	ListUnprocessed(context.Context, string, string, int) (ParkingPage, error)
+	ReadParkingPart(context.Context, string, string, int64) (ParkingPart, error)
 	Replay(context.Context, string, int64, int, func(ParkedMessage) (HazardEvent, error)) (int, error)
 	ReplayReason(context.Context, string, int64, int, string, func(ParkedMessage) (HazardEvent, error)) (int, error)
 	RetryDue(context.Context, string, int64, int, func(ParkedMessage) (HazardEvent, error)) (int, error)
@@ -59,12 +69,15 @@ const parkingColumns = `message_id,source,received_at,source_ref_id,raw,raw_leng
 // A short page still has a cursor; replay callers can request another batch.
 const MaxParkingBatchBytes = 8 << 20
 
+const parkingChunkBytes = 256 << 10
+
 var errInvalidParkingCursor = errors.New("invalid parking cursor")
 
 func scanParked(row pgx.Row) (ParkedMessage, error) {
 	var m ParkedMessage
 
 	err := row.Scan(&m.MessageID, &m.Source, &m.ReceivedAt, &m.SourceRefID, &m.Raw, &m.RawLength, &m.RawSHA256, &m.RawCut, &m.ReasonCode, &m.Reason, &m.Retryable, &m.Attempts, &m.NextAttemptAt, &m.Status, &m.CorrelationID)
+	m.RawChunked = !m.RawCut && m.RawLength > int64(len(m.Raw))
 
 	return m, err
 }
@@ -78,16 +91,23 @@ func (s *Store) park(ctx context.Context, m ParkedMessage, epoch int64) error {
 		return errors.New("parking metadata required")
 	}
 
-	if len(m.Raw) > 4<<20 {
-		return errors.New("oversized body requires bounded prefix")
-	}
-
-	if !m.RawCut {
+	if m.payload == nil && !m.RawCut {
 		sum := sha256.Sum256(m.Raw)
 		m.RawLength = int64(len(m.Raw))
+
 		m.RawSHA256 = hex.EncodeToString(sum[:])
-	} else if len(m.Raw) > 64<<10 || m.RawLength <= int64(len(m.Raw)) || len(m.RawSHA256) != 64 {
+		if len(m.Raw) > defaultMaxSourceBytes {
+			m.payload = bytes.NewReader(m.Raw)
+		}
+	} else if m.RawCut && (m.payload != nil || len(m.Raw) > 64<<10 || m.RawLength <= int64(len(m.Raw)) || len(m.RawSHA256) != 64) {
 		return errors.New("invalid cut body metadata")
+	}
+
+	if m.payload != nil {
+		m.Raw = []byte{}
+		if m.RawLength <= 0 || len(m.RawSHA256) != 64 {
+			return errors.New("invalid oversized body metadata")
+		}
 	}
 
 	m.Status, m.NextAttemptAt = nextParkingStatus(m.Retryable, true, 0, m.ReceivedAt)
@@ -104,12 +124,84 @@ func (s *Store) park(ctx context.Context, m ParkedMessage, epoch int64) error {
 		}
 	}
 
-	_, err = tx.Exec(ctx, `INSERT INTO unprocessed_messages (`+parkingColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(message_id) DO NOTHING`, m.MessageID, m.Source, m.ReceivedAt, m.SourceRefID, m.Raw, m.RawLength, m.RawSHA256, m.RawCut, m.ReasonCode, m.Reason, m.Retryable, m.Attempts, m.NextAttemptAt, m.Status, m.CorrelationID)
+	tag, err := tx.Exec(ctx, `INSERT INTO unprocessed_messages (`+parkingColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+ ON CONFLICT(message_id) DO UPDATE SET raw=EXCLUDED.raw,raw_cut=false
+ WHERE $16::boolean AND unprocessed_messages.raw_cut AND unprocessed_messages.raw_sha256=EXCLUDED.raw_sha256 AND unprocessed_messages.raw_length=EXCLUDED.raw_length`, m.MessageID, m.Source, m.ReceivedAt, m.SourceRefID, m.Raw, m.RawLength, m.RawSHA256, m.RawCut, m.ReasonCode, m.Reason, m.Retryable, m.Attempts, m.NextAttemptAt, m.Status, m.CorrelationID, m.payload != nil)
 	if err != nil {
 		return err
 	}
 
+	if m.payload != nil && tag.RowsAffected() != 0 {
+		if err = writeParkingPayload(ctx, tx, m); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit(ctx)
+}
+
+func writeParkingPayload(ctx context.Context, tx pgx.Tx, m ParkedMessage) error {
+	hash := sha256.New()
+	reader := io.TeeReader(io.NewSectionReader(m.payload, 0, m.RawLength), hash)
+	buffer := make([]byte, parkingChunkBytes)
+
+	var part, length int64
+
+	_, err := tx.CopyFrom(ctx, pgx.Identifier{"unprocessed_payload_chunks"}, []string{"message_id", "part", "data"}, pgx.CopyFromFunc(func() ([]any, error) {
+		n, err := io.ReadFull(reader, buffer)
+		if err == io.EOF {
+			return nil, nil
+		}
+
+		if err != nil && err != io.ErrUnexpectedEOF {
+			return nil, err
+		}
+
+		values := []any{m.MessageID, part, buffer[:n]}
+		part++
+		length += int64(n)
+
+		return values, nil
+	}))
+	if err != nil {
+		return err
+	}
+
+	if length != m.RawLength || hex.EncodeToString(hash.Sum(nil)) != m.RawSHA256 {
+		return errors.New("oversized body does not match parking metadata")
+	}
+
+	return nil
+}
+
+func (s *Store) ReadParkingPart(ctx context.Context, source, id string, part int64) (ParkingPart, error) {
+	var out ParkingPart
+
+	tx, err := s.begin(ctx, true)
+	if err != nil {
+		return out, err
+	}
+	defer tx.Rollback(ctx)
+
+	var length int64
+
+	err = tx.QueryRow(ctx, `SELECT p.data,m.raw_length FROM unprocessed_payload_chunks p
+ JOIN unprocessed_messages m USING (message_id)
+ WHERE m.source=$1 AND p.message_id=$2 AND p.part=$3 AND m.status<>'recovered'`, source, id, part).Scan(&out.Data, &length)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return out, nil
+	}
+
+	if err != nil {
+		return out, err
+	}
+
+	if part < (length-1)/parkingChunkBytes {
+		next := part + 1
+		out.NextPart = &next
+	}
+
+	return out, tx.Commit(ctx)
 }
 
 func (s *Store) ListUnprocessed(ctx context.Context, source, cursor string, limit int) (ParkingPage, error) {

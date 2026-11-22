@@ -182,7 +182,7 @@ func (a *API) ops(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusServiceUnavailable {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusServiceUnavailable {
 		writeError(w, 503, "ops_unavailable")
 		return
 	}

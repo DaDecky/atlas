@@ -109,7 +109,7 @@ func (p SchemaPolicy) MapVolcanic(o Object, now time.Time) (HazardEvent, error) 
 	return MapVolcanic(normalized, now)
 }
 
-func (p *Poller) park(ctx context.Context, path, id string, raw []byte, code, reason string, issue *decode.BodyError) error {
+func (p *Poller) park(ctx context.Context, path, id string, raw []byte, code, reason string, issue *decode.BodyError, payload io.ReaderAt) error {
 	ref := ""
 
 	var object Object
@@ -134,6 +134,12 @@ func (p *Poller) park(ctx context.Context, path, id string, raw []byte, code, re
 		m.RawLength, m.RawSHA256, m.RawCut, m.Retryable = issue.Length, issue.SHA256, issue.Cut, issue.Retryable
 	}
 
+	if payload != nil {
+		m.payload = payload
+		m.Raw = []byte{}
+		m.RawCut = false
+	}
+
 	if path == "/tsunami-warnings" {
 		m.ReasonCode = "warning_" + m.ReasonCode
 	}
@@ -149,7 +155,7 @@ func (p *Poller) park(ctx context.Context, path, id string, raw []byte, code, re
 }
 
 func (p *Poller) DecodeParked(ctx context.Context, m ParkedMessage) (HazardEvent, error) {
-	if m.RawCut || m.Source != p.Source || len(m.Raw) > defaultMaxSourceBytes {
+	if m.RawCut || m.RawChunked || m.Source != p.Source || len(m.Raw) > defaultMaxSourceBytes {
 		return HazardEvent{}, errors.New("message requires source repair")
 	}
 

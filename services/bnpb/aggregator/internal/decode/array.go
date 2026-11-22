@@ -15,6 +15,7 @@ import (
 type Limits struct {
 	BodyBytes, PrefixBytes int
 	Depth, Records         int
+	Oversized              io.Writer // Receives the entire body only if it crosses BodyBytes.
 }
 
 type Record struct {
@@ -35,11 +36,13 @@ type BodyError struct {
 }
 
 type capture struct {
-	r     io.Reader
-	hash  hash.Hash
-	raw   []byte
-	count int64
-	limit int
+	r        io.Reader
+	hash     hash.Hash
+	raw      []byte
+	count    int64
+	limit    int
+	spill    io.Writer
+	spillErr error
 }
 
 type arrayReader struct {
@@ -53,11 +56,26 @@ var errBodyLimit = errors.New("body limit exceeded")
 func (e *BodyError) Error() string { return "source body: " + e.Code }
 
 func (c *capture) Read(p []byte) (int, error) {
+	if c.spillErr != nil {
+		return 0, c.spillErr
+	}
+
 	n, err := c.r.Read(p)
 	if n > 0 {
 		_, _ = c.hash.Write(p[:n])
 		c.count += int64(n)
+
 		keep := min(n, c.limit-len(c.raw))
+		if c.spill != nil && c.count > int64(c.limit) {
+			if c.count-int64(n) <= int64(c.limit) {
+				_, c.spillErr = c.spill.Write(c.raw)
+			}
+
+			if c.spillErr == nil {
+				_, c.spillErr = c.spill.Write(p[:n])
+			}
+		}
+
 		c.raw = append(c.raw, p[:keep]...)
 	}
 
@@ -86,6 +104,10 @@ func (a *arrayReader) nonspace() (byte, error) {
 
 func (a *arrayReader) failure(code string, cause error) error {
 	_, drainErr := io.Copy(io.Discard, a.trace)
+	if a.trace.spillErr != nil {
+		return a.trace.spillErr
+	}
+
 	cut := a.trace.count > int64(a.limit.BodyBytes)
 
 	raw := a.trace.raw
@@ -183,7 +205,7 @@ func Array(input io.Reader, limits Limits, emit func(Record) error) error {
 		limits.Records = 1000
 	}
 
-	c := &capture{r: input, hash: sha256.New(), limit: limits.BodyBytes}
+	c := &capture{r: input, hash: sha256.New(), limit: limits.BodyBytes, spill: limits.Oversized}
 	a := &arrayReader{input: bufio.NewReader(c), trace: c, limit: limits}
 
 	b, err := a.nonspace()
