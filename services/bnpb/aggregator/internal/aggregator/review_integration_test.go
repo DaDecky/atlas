@@ -595,3 +595,36 @@ func TestDataIntegrationPublicationParkingDoesNotStarveSourceReplay(t *testing.T
 		t.Fatal("older publication blocked source replay", recovered, err)
 	}
 }
+
+func TestRefillCopiesLargeStreamStateBeyondShardDeadline(t *testing.T) {
+	c := dataCluster(t)
+	ctx := context.Background()
+	shard := placement.Shard("metadata:SATELIT")
+
+	table, _, _ := c.Placement.Load(ctx)
+	donor, target := table.Shards[shard][0].Node, table.Shards[shard][1].Node
+	// A satellite engine snapshot grows to tens of megabytes on a long feed.
+	state := []byte(`{"blob":"` + strings.Repeat("x", 16<<20) + `"}`)
+	if err := c.Nodes[donor].Shards[shard].restoreState(ctx, "SATELIT", 42, state); err != nil {
+		t.Fatal(err)
+	}
+
+	markCopy(t, c, shard, target)
+	// Client reads keep a tight per-statement deadline. A refill must not inherit it.
+	c.Limits.ShardDeadline = 20 * time.Millisecond
+
+	if err := c.Refill(ctx, shard, target); err != nil {
+		t.Fatal("refill of a large stream state failed", err)
+	}
+
+	if state := copyState(t, c, shard, target); state != "serving" {
+		t.Fatal("refilled target not promoted", state)
+	}
+
+	var size int
+
+	err := c.Nodes[target].Shards[shard].query.QueryRow(ctx, `SELECT length(payload::text) FROM `+c.Nodes[target].Shards[shard].namespace+`.stream_state WHERE source='SATELIT'`).Scan(&size)
+	if err != nil || size < 16<<20 {
+		t.Fatal("target stream state incomplete", size, err)
+	}
+}
