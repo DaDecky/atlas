@@ -163,6 +163,52 @@ func runShardStoreContract(t *testing.T, open func(*testing.T) ShardStore) {
 		}
 	})
 
+	t.Run("degraded commits accumulate staleness", func(t *testing.T) {
+		s := open(t)
+		source := SourceSensorPantai
+		freshness := func() Freshness {
+			t.Helper()
+
+			page, err := s.Read(ctx, Query{Source: source, Limit: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for _, f := range page.Sources {
+				if f.Source == source {
+					return f
+				}
+			}
+
+			t.Fatal("no freshness for", source, page.Sources)
+
+			return Freshness{}
+		}
+		commit := func(offset int64, at time.Time, degraded bool) {
+			t.Helper()
+
+			batch := WriteBatch{Source: source, Epoch: 1, Events: []HazardEvent{}, Now: at, Degraded: degraded}
+			if _, err := s.CommitState(ctx, batch, StreamState{Offset: offset, Payload: json.RawMessage(`{}`)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		commit(1, now, false)
+		commit(2, now.Add(time.Minute), true)
+		commit(3, now.Add(2*time.Minute), true)
+
+		f := freshness()
+		if f.StaleSince == nil || !f.StaleSince.Equal(now.Add(time.Minute)) || f.LastSuccessAt == nil || !f.LastSuccessAt.Equal(now) {
+			t.Fatal("degraded pages reset staleness or claimed success", f.StaleSince, f.LastSuccessAt)
+		}
+
+		commit(4, now.Add(3*time.Minute), false)
+
+		if f = freshness(); f.StaleSince != nil || !f.LastSuccessAt.Equal(now.Add(3*time.Minute)) {
+			t.Fatal("healthy page did not clear staleness", f.StaleSince, f.LastSuccessAt)
+		}
+	})
+
 	t.Run("concurrent replay has one effect", func(t *testing.T) {
 		s := open(t)
 		batch := WriteBatch{Source: "SATELIT", Epoch: 1, Events: []HazardEvent{contractEvent("SATELIT", "one", now)}, Now: now}
