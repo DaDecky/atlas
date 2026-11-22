@@ -130,7 +130,7 @@ def main():
     dev["patches"].append(host_patch)
     write("overlays/dev/kustomization.yaml", dev)
     demo = {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["../../base"], "replicas": [{"name": "aggregator", "count": 3}], "patches": [pin, host_patch, {"target": {"kind": "StatefulSet", "name": "auth-db|bmkg-db|pvmbg-db|rabbitmq"}, "patch": pin["patch"]}, {"target": {"kind": "Deployment", "name": "aggregator"}, "patch": json.dumps([{"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "INGESTION_DISABLED", "value": "1"}}, {"op": "add", "path": "/spec/template/spec/containers/0/env/-", "value": {"name": "CLUSTER_DATA_CONFIG", "value": "/etc/atlas/data/config.json"}}, {"op": "add", "path": "/spec/template/spec/volumes/-", "value": {"name": "data-config", "secret": {"secretName": "canonical-data-config"}}}, {"op": "add", "path": "/spec/template/spec/containers/0/volumeMounts/-", "value": {"name": "data-config", "mountPath": "/etc/atlas/data", "readOnly": True}}])}]}
-    demo["replicas"] += [{"name": name, "count": 2} for name in ["auth", "client-api"]]
+    demo["replicas"] += [{"name": "auth", "count": 2}, {"name": "client-api", "count": 3}]
     write("overlays/demo/kustomization.yaml", demo)
     print("Generated base and dev/demo overlays; vendor manifests preserved")
 
