@@ -1,0 +1,20 @@
+{
+  "context": "atlas-demo",
+  "namespace": "sistem-informasi-kebencanaan-bnpb",
+  "k3s_version": "v1.37.2+k3s1",
+  "pod_cidr": "10.42.0.0/16",
+  "service_cidr": "10.43.0.0/16",
+  "node_network": "10.0.0.0/24",
+  "image_tag": "milestone-2",
+  "client_url": "http://localhost:8080",
+  "auth_url": "http://localhost:8084",
+  "audit_url": "http://localhost:8083",
+  "sensor_url": "http://localhost:18080",
+  "runner_client_url": "http://10.0.0.40:32562",
+  "runner_auth_url": "http://10.0.0.40:31561",
+  "nodes": [
+    {"name": "atlas-node-a", "ssh": "atlas-node-a", "ip": "10.0.0.40", "role": "server"},
+    {"name": "atlas-node-b", "ssh": "atlas-node-b", "ip": "10.0.0.41", "role": "agent"},
+    {"name": "atlas-node-c", "ssh": "atlas-node-c", "ip": "10.0.0.42", "role": "agent"}
+  ]
+}

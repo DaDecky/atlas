@@ -6,6 +6,8 @@ Panduan operator dan narator untuk persiapan, rekaman, pengumpulan bukti, dan pe
 
 Dokumen ini berisi prosedur dan target pengujian, bukan pernyataan bahwa pengujian sudah lulus. Isi hasil dengan angka dari run yang direkam.
 
+**Script siap dijalankan setelah VM hidup:** [QUICKSTART setup dan demo](demo-assets/m2/QUICKSTART.md) menjelaskan installer dependency Ubuntu, bootstrap tiga VM dari operator, deploy konfigurasi ujian, serta command demo P1-P5. Periksa status lokal dengan `python demo-assets/m2/demo.py status`; perintah ini tidak mengakses cluster.
+
 ## 1. Pembagian tugas dan alur video
 
 Pembagian demo mengikuti kontribusi di laporan: **Razi Rachman Widyadhana (13523004)** memegang keandalan dan operasi/P2/P5, **Muhammad Dicky Isra (13523075)** memegang data/P1, dan **Muhammad Adha Ridwan (13523098)** memegang cluster, ingestion, telemetry/P3/P4. Semua anggota tampil dan menjelaskan bagiannya.

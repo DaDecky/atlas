@@ -2,6 +2,8 @@
 
 Panduan per anggota dan urutan rekaman ada di [demo.md](../../demo.md). Folder ini menyimpan patch, snapshot manifest resmi, payload, request manual, fixture sintetis, dan helper yang dapat dibagikan. Nilai token, kunci ujian, dataset asli, dan backup environment disimpan pada mesin operator di luar Git.
 
+Untuk menyalakan VM, memasang dependency OS, bootstrap k3s melalui SSH, dan menjalankan script demo per tahap, ikuti [QUICKSTART](QUICKSTART.md). Mulai dengan `python demo-assets/m2/cluster.py plan` dan `python demo-assets/m2/demo.py status`; keduanya tidak menghubungi cluster.
+
 ## Pemeriksaan tanpa cluster
 
 Jalankan dari root repo dengan Python 3 dan kubectl tersedia pada PATH. Pasang parser YAML ke folder lokal yang diabaikan Git:
