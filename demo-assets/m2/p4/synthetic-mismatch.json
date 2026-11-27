@@ -1,0 +1,21 @@
+[
+  {
+    "fire_id": "synthetic-fire-001",
+    "detection_keys": [
+      "synthetic-a",
+      "synthetic-b"
+    ],
+    "detection_count": 2,
+    "total_frp_mw": 21,
+    "severity": "WASPADA",
+    "latitude": -6.0,
+    "longitude": 106.0,
+    "area_name": "Synthetic fixture",
+    "occurred_at": "2026-11-27T00:00:00Z",
+    "satellites": [
+      "NOAA-20",
+      "Suomi-NPP"
+    ],
+    "max_confidence": "h"
+  }
+]

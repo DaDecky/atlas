@@ -1,0 +1,80 @@
+{
+  "apiVersion": "kustomize.config.k8s.io/v1beta1",
+  "kind": "Kustomization",
+  "namespace": "sistem-informasi-kebencanaan-bnpb",
+  "resources": [
+    "../../../deploy/k8s/overlays/demo",
+    "../../../deploy/k8s/telemetry"
+  ],
+  "images": [
+    {
+      "name": "atlas/bmkg",
+      "newTag": "milestone-2"
+    },
+    {
+      "name": "atlas/pvmbg",
+      "newTag": "milestone-2"
+    },
+    {
+      "name": "atlas/auth",
+      "newTag": "milestone-2"
+    },
+    {
+      "name": "atlas/client-api",
+      "newTag": "milestone-2"
+    },
+    {
+      "name": "atlas/aggregator",
+      "newTag": "milestone-2"
+    },
+    {
+      "name": "atlas/consumer-a",
+      "newTag": "milestone-2"
+    },
+    {
+      "name": "atlas/consumer-b",
+      "newTag": "milestone-2"
+    },
+    {
+      "name": "atlas/notifier",
+      "newTag": "milestone-2"
+    }
+  ],
+  "patches": [
+    {
+      "target": {
+        "kind": "Deployment",
+        "name": "sensor-pantai"
+      },
+      "patch": "{\"apiVersion\": \"apps/v1\", \"kind\": \"Deployment\", \"metadata\": {\"name\": \"sensor-pantai\"}, \"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": \"sensor\", \"image\": \"sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d\", \"env\": [{\"name\": \"PANTAI_PROFILE\", \"value\": \"exam\"}, {\"name\": \"PANTAI_SEED\", \"value\": \"42\"}], \"volumeMounts\": [{\"name\": \"key\", \"mountPath\": \"/var/run/pantai\", \"readOnly\": true}]}], \"volumes\": [{\"name\": \"key\", \"secret\": {\"secretName\": \"pantai-key\"}}]}}}}"
+    },
+    {
+      "target": {
+        "kind": "Deployment",
+        "name": "aggregator"
+      },
+      "patch": "{\"apiVersion\": \"apps/v1\", \"kind\": \"Deployment\", \"metadata\": {\"name\": \"aggregator\"}, \"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": \"aggregator\", \"env\": [{\"name\": \"INGESTION_DISABLED\", \"value\": \"0\"}]}]}}}}"
+    },
+    {
+      "target": {
+        "kind": "Deployment",
+        "name": "aggregator"
+      },
+      "patch": "{\"apiVersion\": \"apps/v1\", \"kind\": \"Deployment\", \"metadata\": {\"name\": \"aggregator\"}, \"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": \"aggregator\", \"env\": [{\"name\": \"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT\", \"value\": \"http://jaeger:4318/v1/traces\"}, {\"name\": \"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT\", \"value\": \"http://victoriametrics:8428/opentelemetry/v1/metrics\"}, {\"name\": \"OTEL_TRACES_SAMPLER\", \"value\": \"parentbased_traceidratio\"}, {\"name\": \"OTEL_TRACES_SAMPLER_ARG\", \"value\": \"0.1\"}]}]}}}}"
+    },
+    {
+      "target": {
+        "kind": "Deployment",
+        "name": "auth"
+      },
+      "patch": "{\"apiVersion\": \"apps/v1\", \"kind\": \"Deployment\", \"metadata\": {\"name\": \"auth\"}, \"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": \"auth\", \"env\": [{\"name\": \"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT\", \"value\": \"http://jaeger:4318/v1/traces\"}, {\"name\": \"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT\", \"value\": \"http://victoriametrics:8428/opentelemetry/v1/metrics\"}, {\"name\": \"OTEL_TRACES_SAMPLER\", \"value\": \"parentbased_traceidratio\"}, {\"name\": \"OTEL_TRACES_SAMPLER_ARG\", \"value\": \"0.1\"}]}]}}}}"
+    },
+    {
+      "target": {
+        "kind": "Deployment",
+        "name": "client-api"
+      },
+      "patch": "{\"apiVersion\": \"apps/v1\", \"kind\": \"Deployment\", \"metadata\": {\"name\": \"client-api\"}, \"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": \"client-api\", \"env\": [{\"name\": \"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT\", \"value\": \"http://jaeger:4318/v1/traces\"}, {\"name\": \"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT\", \"value\": \"http://victoriametrics:8428/opentelemetry/v1/metrics\"}, {\"name\": \"OTEL_TRACES_SAMPLER\", \"value\": \"parentbased_traceidratio\"}, {\"name\": \"OTEL_TRACES_SAMPLER_ARG\", \"value\": \"0.1\"}]}]}}}}"
+    }
+  ]
+}

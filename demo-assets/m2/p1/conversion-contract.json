@@ -1,0 +1,20 @@
+{
+  "owner": "Dicky; Adha coordinates cluster loading",
+  "input": "seismic_events.jsonl.gz containing SeismicEvent JSON Lines",
+  "output": "seismic-hazards.jsonl containing canonical HazardEvent JSON Lines",
+  "expected_records": 25001,
+  "expected_event_id_checksum": "8600358903602dad850c6a5bd96b670336ad0d4ffd9a69932dea25c58b344f0f",
+  "checksum_definition": "UTF-8 event_id byte-sorted, joined with one newline, no trailing newline",
+  "mapping": "services/bnpb/aggregator/internal/aggregator/mapping.go: MapSeismic",
+  "identity": "source=BMKG, source_ref_id=event_id, hazard_id=CanonicalHazardID(BMKG,event_id)",
+  "identity_formula": "hex SHA256 of UTF-8 BMKG + NUL byte + UTF-8 event_id",
+  "preserve": [
+    "event_id identity",
+    "occurred_at",
+    "all source extension attributes"
+  ],
+  "writer_epoch": "must be the current coordinated BMKG writer epoch; never force it",
+  "verification": "compare the official ID set separately from seed/live BMKG events",
+  "dataset_available": false,
+  "conversion_executed": false
+}

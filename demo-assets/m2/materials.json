@@ -1,0 +1,15 @@
+{
+  "sensor_image": "sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d",
+  "tester_image": "sustuna/tester-agent@sha256:b3143da159cf23a8744ede12b847da6208353754234d53a5a7b46d071cf277ec",
+  "tester_manifest": "https://raw.githubusercontent.com/susTuna/if4031-tester-agent/ebb55261711123a9a211739ffbf140a275caa6da/manifest.yaml",
+  "deadline_wib": "2026-11-29T23:59:00+07:00",
+  "p1_expected_records": 25001,
+  "p1_expected_checksum": "8600358903602dad850c6a5bd96b670336ad0d4ffd9a69932dea25c58b344f0f",
+  "reference_fixtures": "synthetic only; not assistant exam data",
+  "pending_external_materials": [
+    "seismic_events.jsonl.gz",
+    "satellite reference for the recorded window, if supplied"
+  ],
+  "cluster_changes": false,
+  "exam_session_started": false
+}

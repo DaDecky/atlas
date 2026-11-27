@@ -1,0 +1,12 @@
+{
+  "apiVersion": "v1",
+  "kind": "Secret",
+  "metadata": {
+    "name": "pantai-key",
+    "namespace": "sistem-informasi-kebencanaan-bnpb"
+  },
+  "type": "Opaque",
+  "stringData": {
+    "key": "<gunakan berkas key dari email; jangan apply template ini>"
+  }
+}

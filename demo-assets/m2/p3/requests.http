@@ -1,0 +1,33 @@
+# Request manual: jalankan hanya ketika cluster dan token sudah tersedia.
+# Isi OPS_TOKEN/FIELD_TOKEN di environment REST client, bukan dalam file ini.
+@client = http://localhost:8080
+@audit = http://localhost:8083
+
+### Daftar parking: limit Internal Ops maksimal 10
+GET {{client}}/internal-ops/unprocessed?source=PVMBG&limit=10
+Authorization: Bearer {{OPS_TOKEN}}
+X-Correlation-ID: atlas-demo-p3-list
+
+### Ambil body satu pesan (raw base64; periksa raw_chunked/ReadParkingPart jika perlu)
+GET {{client}}/internal-ops/unprocessed?source=PVMBG&include_raw=true&limit=1
+Authorization: Bearer {{OPS_TOKEN}}
+
+### Ringkasan Audit
+GET {{audit}}/internal/audit/unprocessed?source=PVMBG&limit=20
+Authorization: Bearer {{AUDIT_TOKEN}}
+
+### Replay hanya setelah kebijakan diperbaiki dan gangguan ujian selesai
+POST {{client}}/internal-ops/replay
+Authorization: Bearer {{OPS_TOKEN}}
+Content-Type: application/json
+X-Correlation-ID: atlas-demo-p3-replay
+
+{"source":"PVMBG","reason_code":"schema_violation","limit":100}
+
+### Laporan lapangan: gunakan payload field-report.json dan perbarui observed_at
+POST {{client}}/field-reports
+Authorization: Bearer {{FIELD_TOKEN}}
+Content-Type: application/json
+X-Correlation-ID: atlas-demo-p3-field
+
+< ./field-report.json

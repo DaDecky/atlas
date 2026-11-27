@@ -1,0 +1,19 @@
+# Pembacaan manual; start ujian hanya saat recorder sudah berjalan.
+@audit = http://localhost:8083
+@satellite = https://satellite.naufarrel.dev
+
+### SATELIT pada Atlas: lanjutkan next_cursor untuk ekspor lengkap
+GET {{audit}}/internal/audit/events?source=SATELIT&limit=1000
+Authorization: Bearer {{AUDIT_TOKEN}}
+
+### Checksum SATELIT pada Atlas
+GET {{audit}}/internal/audit/checksum?source=SATELIT
+Authorization: Bearer {{AUDIT_TOKEN}}
+
+### Stream: jangan jalankan sekarang untuk memulai sesi
+GET {{satellite}}/v1/stream
+Authorization: Bearer {{SATELLITE_TOKEN}}
+
+### Mulai ujian SEKALI, tepat saat rekaman; jangan gunakan Send All
+POST {{satellite}}/v1/exam/start
+Authorization: Bearer {{SATELLITE_TOKEN}}

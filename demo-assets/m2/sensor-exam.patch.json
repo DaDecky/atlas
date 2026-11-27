@@ -1,0 +1,39 @@
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "containers": [
+          {
+            "name": "sensor",
+            "image": "sustuna/sensor-pantai@sha256:51fbd90d3891ad6e9f5768ad330ffb65205644cb29e50da65c7538f2e0b4397d",
+            "env": [
+              {
+                "name": "PANTAI_PROFILE",
+                "value": "exam"
+              },
+              {
+                "name": "PANTAI_SEED",
+                "value": "42"
+              }
+            ],
+            "volumeMounts": [
+              {
+                "name": "key",
+                "mountPath": "/var/run/pantai",
+                "readOnly": true
+              }
+            ]
+          }
+        ],
+        "volumes": [
+          {
+            "name": "key",
+            "secret": {
+              "secretName": "pantai-key"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
