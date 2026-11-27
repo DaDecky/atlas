@@ -4,6 +4,8 @@ Panduan per anggota dan urutan rekaman ada di [demo.md](../../demo.md). Folder i
 
 Untuk menyalakan VM, memasang dependency OS, bootstrap k3s melalui SSH, dan menjalankan script demo per tahap, ikuti [QUICKSTART](QUICKSTART.md). Mulai dengan `python demo-assets/m2/cluster.py plan` dan `python demo-assets/m2/demo.py status`; keduanya tidak menghubungi cluster.
 
+Shortcut operator M2 tersedia sebagai `make p1`, `make p2`, `make p3`, `make p4`, dan `make p5`. Tambahkan `RUN_ID=rekaman-01` agar evidence konsisten atau `DRY_RUN=1` untuk memeriksa alurnya tanpa infra. P1/P2/P3/P5 memicu satu skenario Tester Agent, sedangkan P4 mengekspor Audit SATELIT; start satelit tetap perintah terpisah. Detail ada pada bagian shortcut Make di QUICKSTART.
+
 ## Pemeriksaan tanpa cluster
 
 Jalankan dari root repo dengan Python 3 dan kubectl tersedia pada PATH. Pasang parser YAML ke folder lokal yang diabaikan Git:

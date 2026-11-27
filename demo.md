@@ -8,6 +8,8 @@ Dokumen ini berisi prosedur dan target pengujian, bukan pernyataan bahwa penguji
 
 **Script siap dijalankan setelah VM hidup:** [QUICKSTART setup dan demo](demo-assets/m2/QUICKSTART.md) menjelaskan installer dependency Ubuntu, bootstrap tiga VM dari operator, deploy konfigurasi ujian, serta command demo P1-P5. Periksa status lokal dengan `python demo-assets/m2/demo.py status`; perintah ini tidak mengakses cluster.
 
+**Shortcut Make M2:** `make p1`, `make p2`, `make p3`, dan `make p5` memicu satu skenario ujian sesuai problem. `make p4` mengekspor Audit SATELIT dari sesi yang sudah berjalan. Gunakan `RUN_ID=rekaman-01` untuk evidence dan `DRY_RUN=1` untuk preview. Jalankan tiap problem secara terpisah; langkah pembuktian lengkap tetap mengikuti panduan ini. Start satelit dilakukan melalui `make satellite-start RECORDING_STARTED=1` tepat setelah recorder berjalan.
+
 ## 1. Pembagian tugas dan alur video
 
 Pembagian demo mengikuti kontribusi di laporan: **Razi Rachman Widyadhana (13523004)** memegang keandalan dan operasi/P2/P5, **Muhammad Dicky Isra (13523075)** memegang data/P1, dan **Muhammad Adha Ridwan (13523098)** memegang cluster, ingestion, telemetry/P3/P4. Semua anggota tampil dan menjelaskan bagiannya.

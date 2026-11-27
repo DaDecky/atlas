@@ -37,6 +37,12 @@ help:
 	@echo "make deploy       Build and deploy Kustomize; pass context/options in DEPLOY_ARGS"
 	@echo "make deploy-demo  Deploy the k3s demo with ingestion and telemetry; pass cluster options in DEPLOY_ARGS"
 	@echo "make demo         Check every spec criterion on Compose. P=P3 runs one problem, LOAD=1 adds k6, KEEP=1 keeps the stack"
+	@echo "make p1/p2/p3/p5 Start one M2 Tester Agent exam on the prepared cluster; RUN_ID=demo, DRY_RUN=1 previews"
+	@echo "make p4           Export all SATELIT Audit pages for M2; does not start the satellite session"
+	@echo "make demo-status  Show local M2 readiness without accessing the cluster"
+	@echo "make demo-ports   Open the six M2 localhost port forwards (foreground)"
+	@echo "make demo-capture Capture M2 logs for RUN_ID (foreground)"
+	@echo "make satellite-start RECORDING_STARTED=1  Start the satellite exam once when recording begins"
 
 env:
 	./scripts/env.sh
@@ -104,3 +110,45 @@ demo:
 .PHONY: data-integration
 data-integration:
 	./scripts/data-integration.sh
+
+# M2 shortcuts call the staged operator CLI. They never start another problem
+# or a satellite session as an implicit dependency.
+DEMO_PYTHON ?= python
+RUN_ID ?= demo
+DRY_RUN ?= 0
+DEMO_CONFIG ?=
+ifneq ($(DRY_RUN),0)
+ifneq ($(DRY_RUN),1)
+$(error DRY_RUN must be 0 or 1)
+endif
+endif
+DEMO_FLAGS = --run-id "$(RUN_ID)" $(if $(filter 1,$(DRY_RUN)),--dry-run) $(if $(DEMO_CONFIG),--config "$(DEMO_CONFIG)")
+DEMO_COMMAND = $(DEMO_PYTHON) demo-assets/m2/demo.py $(DEMO_FLAGS)
+
+M2_PROBLEM_GOALS := $(filter p1 p2 p3 p4 p5,$(MAKECMDGOALS))
+ifneq ($(word 2,$(M2_PROBLEM_GOALS)),)
+$(error Run one M2 problem per invocation; wait for its scenario and recovery before starting the next)
+endif
+
+.PHONY: p1 p2 p3 p4 p5 demo-status demo-ports demo-capture satellite-start
+p1 p2 p3:
+	$(DEMO_COMMAND) exam $@
+
+p4:
+	$(DEMO_COMMAND) export-satellite
+
+p5:
+	$(DEMO_COMMAND) exam p5 $(if $(SINCE),--since "$(SINCE)")
+
+demo-status:
+	$(DEMO_COMMAND) status
+
+demo-ports:
+	$(DEMO_COMMAND) ports
+
+demo-capture:
+	$(DEMO_COMMAND) capture
+
+satellite-start:
+	@test "$(RECORDING_STARTED)" = "1" || { echo "Start recording first, then run make satellite-start RECORDING_STARTED=1" >&2; exit 2; }
+	$(DEMO_COMMAND) start-satellite --recording-started

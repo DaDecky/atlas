@@ -88,6 +88,26 @@ python demo-assets/m2/cluster.py kubeconfig
 python demo-assets/m2/cluster.py verify
 ```
 
+## Shortcut Make untuk operator
+
+Setelah deploy dan konfigurasi ujian siap, Make menyediakan shortcut M2 berikut dari root repo. Gunakan Bash/WSL atau shell yang dapat menjalankan Makefile repo.
+
+| Perintah | Aksi |
+| --- | --- |
+| `make demo-status` | Status lokal; tidak mengakses cluster. |
+| `make demo-ports` | Enam port forward dalam foreground. |
+| `make demo-capture RUN_ID=rekaman-01` | Capture log; hentikan dengan Ctrl+C setelah pengukuran selesai. |
+| `make p1 RUN_ID=rekaman-01` | Jalankan `Tester Agent exam p1`. |
+| `make p2 RUN_ID=rekaman-01` | Jalankan `Tester Agent exam p2`. |
+| `make p3 RUN_ID=rekaman-01` | Jalankan `Tester Agent exam p3`. |
+| `make p4 RUN_ID=rekaman-01` | Ekspor seluruh halaman Audit SATELIT dari sesi yang sudah berjalan. |
+| `make p5 RUN_ID=rekaman-01` | Ambil awal window sensor, lalu jalankan `Tester Agent exam p5`. |
+| `make satellite-start RUN_ID=rekaman-01 RECORDING_STARTED=1` | Start satelit secara eksplisit saat recorder sudah berjalan. |
+
+Untuk memeriksa perintah tanpa akses infra, jalankan `make p1 DRY_RUN=1` atau `make p2 DRY_RUN=1`. `make -n p1` hanya mencetak recipe Make tanpa menjalankan Python. Gunakan `DEMO_CONFIG=<path-config>` untuk config khusus dan `DEMO_PYTHON=<python>` untuk interpreter lain. P5 menerima `SINCE=<RFC3339-dengan-timezone>` jika waktu awal perlu ditentukan manual.
+
+Jalankan satu problem per invocation; `make p1 p2` ditolak agar skenario kedua tidak menimpa yang pertama. Tunggu skenario dan recovery selesai sebelum menjalankan target berikutnya. Shortcut P1/P2/P3/P5 hanya memicu ujian; pengumpulan bukti, load test, policy/replay, dan analisis tetap mengikuti langkah per problem di bawah. P4 tidak memanggil start sesi. Pemeriksaan Compose M1 tetap menggunakan `make demo P=P1`, `make demo P=P2`, dan seterusnya.
+
 ## 4. Environment, kunci, dan deploy aplikasi
 
 Pada mesin ini environment/kunci sebelumnya sudah diisi. Pada operator lain, buat atau pertahankan kredensial service dan isi materi email dengan input tersembunyi:
